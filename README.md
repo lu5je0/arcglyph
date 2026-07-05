@@ -69,7 +69,7 @@ context menu, since arcglyph only intercepts when a real drag happens.
 One YAML flow-style entry per binding:
 
 ```yaml
-- { label: 关闭标签页, pattern: "26", keys: [LEFTCTRL, W], apps: [google-chrome] }
+- { label: Close tab, pattern: "26", keys: [LEFTCTRL, W], apps: [google-chrome] }
 ```
 
 Fields:
