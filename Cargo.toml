@@ -1,0 +1,32 @@
+[package]
+name = "arcglyph"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "arcglyph"
+path = "src/lib.rs"
+
+[[bin]]
+name = "arcglyph"
+path = "src/bin/arcglyph.rs"
+
+[dependencies]
+evdev = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1"
+anyhow = "1"
+nix = { version = "0.29", features = ["poll"] }
+smithay-client-toolkit = "0.19"
+tiny-skia = "0.11"
+iced = { version = "0.13", features = ["tokio"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "sync"] }
+ksni = "0.3"
+dbus = "0.9"
+tempfile = "3"
+
+[profile.release]
+lto = true
+opt-level = "z"
+strip = true
