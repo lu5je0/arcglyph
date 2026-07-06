@@ -8,11 +8,13 @@ draws a smooth blue trail while you move.
 
 - Gesture recognition via evdev grab + uinput injection
 - KWin-native focused-window detection through the Scripting DBus API
-- Per-app bindings (Chrome / Firefox / anything with an `app_id`)
+- Per-app gesture groups — one group can cover multiple apps
 - Configurable via YAML or an inline GUI editor
+- Config hot-reload — save in GUI and changes apply instantly
 - Wayland-first: overlay drawn through `wlr-layer-shell`, no X11 involved
 - Single binary, ships with a system-tray control (StatusNotifierItem)
 - Fullscreen windows are auto-bypassed — games and video players stay untouched
+- Smart bypass: apps without configured gestures get normal right-click behavior
 
 ## Quick start
 
@@ -29,70 +31,75 @@ cargo build --release
 
 # 4. Run
 ./target/release/arcglyph
-# or, if you installed the desktop entry, pick "Arcglyph" from the launcher.
 ```
 
 ## Gestures
 
-Directions use the numpad convention:
+Directions use the numpad convention (4-way cardinal):
 
 ```
-7 8 9      ↖ ↑ ↗
-4 . 6      ← . →
-1 2 3      ↙ ↓ ↘
+    8         ↑
+  4 . 6  =>  ← . →
+    2         ↓
 ```
 
-A pattern is the sequence of direction changes. `26` = down, then right
-(a right-angle L). Small drifts within 90° of the current direction are
-absorbed, so diagonals are only recorded when the motion actually goes
-diagonally.
-
-Defaults (scoped to Chromium-family browsers):
-
-| Pattern | Action |
-|---|---|
-| `4` | Back (Alt+←) |
-| `6` | Forward (Alt+→) |
-| `8` | Scroll to top (Home) |
-| `2` | Scroll to bottom (End) |
-| `26` | Close tab (Ctrl+W) |
-| `24` | Reopen closed tab (Ctrl+Shift+T) |
-| `46` | Reload (F5) |
-
-Every other app sees the right mouse button unchanged — including its
-context menu, since arcglyph only intercepts when a real drag happens.
+A pattern is the sequence of direction changes. `26` = down then right
+(an L-shape). Each direction has a 90° sector giving ±45° tolerance,
+so imprecise drawing is handled gracefully.
 
 ## Configuration
 
 `~/.config/arcglyph/arcglyph.yaml` (override with `ARCGLYPH_CONFIG=`).
 
-One YAML flow-style entry per binding:
+Gestures are organized into **groups**. Each group associates a set of
+apps with a list of gestures:
 
 ```yaml
-- { label: Close tab, pattern: "26", keys: [LEFTCTRL, W], apps: [google-chrome] }
+enabled: true
+groups:
+  - name: 浏览器
+    apps: [google-chrome, chromium, microsoft-edge]
+    gestures:
+      - {label: 后退, pattern: "4", keys: [LEFTALT, LEFT]}
+      - {label: 前进, pattern: "6", keys: [LEFTALT, RIGHT]}
+      - {label: 回到顶部, pattern: "8", keys: [HOME]}
+      - {label: 滚动到底部, pattern: "2", keys: [END]}
+      - {label: 关闭标签页, pattern: "26", keys: [LEFTCTRL, W]}
+      - {label: 恢复关闭的标签页, pattern: "24", keys: [LEFTCTRL, LEFTSHIFT, T]}
+      - {label: 刷新, pattern: "46", keys: [F5]}
+  - name: 全局
+    apps: []
+    gestures:
+      - {label: 切换窗口, pattern: "46", keys: [LEFTALT, TAB]}
 ```
 
 Fields:
 
-- `pattern` — numpad-direction sequence.
-- `keys` — evdev key names pressed as a chord (`linux/input-event-codes.h`).
-- `apps` — optional. Case-insensitive substrings matched against the focused
-  window's `app_id`. Empty means "every window".
-- `label` — description shown in the GUI.
+- `groups[*].name` — display name shown in the GUI.
+- `groups[*].apps` — list of app_id substrings (case-insensitive). Empty means "every window".
+- `groups[*].gestures[*].pattern` — numpad-direction sequence.
+- `groups[*].gestures[*].keys` — evdev key names pressed as a chord.
+- `groups[*].gestures[*].label` — description shown in the GUI.
+- `groups[*].gestures[*].enabled` — per-gesture switch.
+
+Config changes are detected automatically via inotify — no restart needed.
 
 ## GUI
 
 Left-click the tray icon or pick **Preferences…** to open the editor.
-Closing the window keeps the daemon running; **Quit** stops everything.
+
+- Sidebar lists gesture groups; select one to edit its gestures
+- Each group can associate multiple apps via chips or the **拾取窗口** button
+- **拾取窗口**: click the button, then click any window — its app_id is automatically added to the group
+- Closing the window keeps the daemon running; **Quit** stops everything
 
 ## Notes
 
 - The daemon grabs every pointing device with a right-button + relative axes.
   Motion, wheel and other buttons are replayed through a virtual mouse so
   nothing else changes.
-- Focused-window detection uses KWin's Scripting DBus API (same trick as
-  [kdotool](https://github.com/jinliu/kdotool)). One round-trip per press,
-  typically <20 ms.
-- If a fullscreen window is focused when you press the right button,
-  arcglyph bypasses the whole cycle so games and video players don't lose
-  input.
+- Focused-window detection uses KWin's Scripting DBus API. A background
+  thread refreshes the cache every 300 ms so the right-click path never blocks.
+- If a fullscreen window is focused, arcglyph bypasses completely.
+- If the cursor is outside the focused window, right-click passes through unchanged.
+- Apps without any configured gestures get native right-click with zero delay.

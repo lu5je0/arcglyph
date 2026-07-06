@@ -15,7 +15,7 @@ use std::{
 ///
 /// Returns (app_id, fullscreen). app_id is empty when there is no active
 /// window at all.
-pub fn query() -> Result<(String, bool)> {
+pub fn query() -> Result<(String, bool, bool)> {
     let ctx = Ctx::new()?;
     let self_conn = SyncConnection::new_session().context("open session bus (self)")?;
     let dbus_addr = self_conn.unique_name().to_string();
@@ -24,13 +24,19 @@ pub fn query() -> Result<(String, bool)> {
     let payload = run_script(&script, &ctx, self_conn)?;
     let info: WindowInfo =
         serde_json::from_str(&payload).with_context(|| format!("parse payload {}", payload))?;
-    Ok((info.app_id, info.fullscreen))
+    Ok((info.app_id, info.fullscreen, info.cursor_inside))
 }
 
 #[derive(serde::Deserialize)]
 struct WindowInfo {
     app_id: String,
     fullscreen: bool,
+    #[serde(default = "default_true")]
+    cursor_inside: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 struct Ctx {
@@ -61,11 +67,16 @@ function report_err(msg) {{
 try {{
     let w = workspace.activeWindow;
     if (w == null) {{
-        report(JSON.stringify({{ app_id: "", fullscreen: false }}));
+        report(JSON.stringify({{ app_id: "", fullscreen: false, cursor_inside: false }}));
     }} else {{
+        let cur = workspace.cursorPos;
+        let geo = w.frameGeometry;
+        let inside = cur.x >= geo.x && cur.x < geo.x + geo.width &&
+                     cur.y >= geo.y && cur.y < geo.y + geo.height;
         report(JSON.stringify({{
             app_id: (w.resourceClass || "").toString(),
             fullscreen: !!w.fullScreen,
+            cursor_inside: inside,
         }}));
     }}
 }} catch (e) {{
@@ -159,17 +170,37 @@ fn run_script(script: &str, ctx: &Ctx, self_conn: SyncConnection) -> Result<Stri
 }
 
 // API-compatible facade so daemon.rs doesn't have to change much.
+// Snapshot lookups now hit an in-memory cache that a background thread
+// refreshes every ~300 ms, so the right-click hot path never blocks on
+// KWin's DBus round-trip.
 #[derive(Clone, Default)]
-pub struct FocusTracker;
+pub struct FocusTracker {
+    inner: std::sync::Arc<std::sync::Mutex<CacheEntry>>,
+}
+
+#[derive(Default, Clone)]
+struct CacheEntry {
+    app_id: Option<String>,
+    fullscreen: bool,
+    cursor_inside: bool,
+}
 
 impl FocusTracker {
-    /// Fetch (app_id, fullscreen) in one round-trip.
-    pub fn snapshot(&self) -> (Option<String>, bool) {
+    pub fn snapshot(&self) -> (Option<String>, bool, bool) {
+        let g = self.inner.lock().unwrap();
+        (g.app_id.clone(), g.fullscreen, g.cursor_inside)
+    }
+
+    fn refresh(&self) {
         match query() {
-            Ok((app, fs)) => (if app.is_empty() { None } else { Some(app) }, fs),
-            Err(e) => {
-                eprintln!("focus query failed: {:#}", e);
-                (None, false)
+            Ok((app, fs, cursor_inside)) => {
+                let mut g = self.inner.lock().unwrap();
+                g.app_id = if app.is_empty() { None } else { Some(app) };
+                g.fullscreen = fs;
+                g.cursor_inside = cursor_inside;
+            }
+            Err(_) => {
+                // keep last-known values on transient errors
             }
         }
     }
@@ -184,5 +215,15 @@ impl FocusHandle {
 }
 
 pub fn spawn() -> Result<(FocusTracker, FocusHandle)> {
-    Ok((FocusTracker, FocusHandle))
+    let tracker = FocusTracker::default();
+    tracker.refresh(); // seed
+    let t2 = tracker.clone();
+    std::thread::Builder::new()
+        .name("arcglyph-focus".into())
+        .spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            t2.refresh();
+        })
+        .context("spawn focus polling thread")?;
+    Ok((tracker, FocusHandle))
 }

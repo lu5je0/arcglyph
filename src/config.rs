@@ -5,9 +5,35 @@ use std::{fs, path::PathBuf};
 
 use crate::keys;
 
-#[derive(Debug, Default, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub groups: Vec<GroupCfg>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            groups: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupCfg {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub apps: Vec<String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
     pub gestures: Vec<GestureCfg>,
 }
 
@@ -17,8 +43,8 @@ pub struct GestureCfg {
     pub label: Option<String>,
     pub pattern: String,
     pub keys: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub apps: Vec<String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -27,10 +53,11 @@ pub struct Gesture {
     pub keys: Vec<Key>,
     pub apps: Vec<String>,
     pub label: Option<String>,
+    pub enabled: bool,
 }
 
 impl Gesture {
-    pub fn from_cfg(cfg: &GestureCfg) -> Result<Self> {
+    pub fn from_cfg(cfg: &GestureCfg, group_apps: &[String], group_enabled: bool) -> Result<Self> {
         let keys = cfg
             .keys
             .iter()
@@ -39,8 +66,9 @@ impl Gesture {
         Ok(Gesture {
             pattern: cfg.pattern.clone(),
             keys,
-            apps: cfg.apps.clone(),
+            apps: group_apps.to_vec(),
             label: cfg.label.clone(),
+            enabled: cfg.enabled && group_enabled,
         })
     }
 }
@@ -58,29 +86,114 @@ pub fn path() -> PathBuf {
     base.join("arcglyph").join("arcglyph.yaml")
 }
 
-pub fn load() -> Result<Vec<Gesture>> {
+pub fn load() -> Result<(bool, Vec<Gesture>)> {
     let p = path();
     if !p.exists() {
         eprintln!("no config at {}, using defaults", p.display());
-        return Ok(defaults());
+        let cfg = default_config();
+        let gs = flatten_groups(&cfg.groups)?;
+        return Ok((cfg.enabled, gs));
     }
     let text = fs::read_to_string(&p).with_context(|| format!("read {}", p.display()))?;
-    let cfg: Config = serde_yaml::from_str(&text).context("parse config")?;
-    cfg.gestures
-        .iter()
-        .map(Gesture::from_cfg)
-        .collect::<Result<Vec<_>>>()
+    let cfg = parse_config(&text)?;
+    let gs = flatten_groups(&cfg.groups)?;
+    Ok((cfg.enabled, gs))
 }
 
 pub fn load_raw() -> Result<Config> {
     let p = path();
     if !p.exists() {
-        return Ok(Config {
-            gestures: defaults().into_iter().map(GestureCfg::from_gesture).collect(),
-        });
+        return Ok(default_config());
     }
     let text = fs::read_to_string(&p).with_context(|| format!("read {}", p.display()))?;
-    serde_yaml::from_str(&text).context("parse config")
+    parse_config(&text)
+}
+
+fn flatten_groups(groups: &[GroupCfg]) -> Result<Vec<Gesture>> {
+    let mut out = Vec::new();
+    for grp in groups {
+        for g in &grp.gestures {
+            out.push(Gesture::from_cfg(g, &grp.apps, grp.enabled)?);
+        }
+    }
+    Ok(out)
+}
+
+fn parse_config(text: &str) -> Result<Config> {
+    if let Ok(cfg) = serde_yaml::from_str::<Config>(text) {
+        if !cfg.groups.is_empty() {
+            return Ok(cfg);
+        }
+    }
+    // Legacy format: try as { enabled, gestures: [...] } with per-gesture apps
+    #[derive(Deserialize)]
+    struct LegacyConfig {
+        #[serde(default = "default_true")]
+        enabled: bool,
+        #[serde(default)]
+        gestures: Vec<LegacyGestureCfg>,
+    }
+    #[derive(Deserialize)]
+    struct LegacyGestureCfg {
+        label: Option<String>,
+        pattern: String,
+        keys: Vec<String>,
+        #[serde(default)]
+        apps: Vec<String>,
+        #[serde(default = "default_true")]
+        enabled: bool,
+    }
+
+    let legacy: LegacyConfig = match serde_yaml::from_str(text) {
+        Ok(c) => c,
+        Err(_) => {
+            // Bare list of gestures
+            let list: Vec<LegacyGestureCfg> =
+                serde_yaml::from_str(text).context("parse config")?;
+            LegacyConfig { enabled: true, gestures: list }
+        }
+    };
+
+    // Group legacy gestures by their apps list
+    let mut groups: Vec<GroupCfg> = Vec::new();
+    for lg in legacy.gestures {
+        let apps_key: Vec<String> = {
+            let mut sorted = lg.apps.clone();
+            sorted.sort();
+            sorted
+        };
+        let grp = groups.iter_mut().find(|g| {
+            let mut ga = g.apps.clone();
+            ga.sort();
+            ga == apps_key
+        });
+        let gesture_cfg = GestureCfg {
+            label: lg.label,
+            pattern: lg.pattern,
+            keys: lg.keys,
+            enabled: lg.enabled,
+        };
+        if let Some(grp) = grp {
+            grp.gestures.push(gesture_cfg);
+        } else {
+            let name = if apps_key.is_empty() {
+                "全局".to_string()
+            } else {
+                apps_key.join(", ")
+            };
+            groups.push(GroupCfg {
+                name,
+                apps: lg.apps,
+                enabled: true,
+                gestures: vec![gesture_cfg],
+            });
+        }
+    }
+
+    Ok(Config {
+        enabled: legacy.enabled,
+        groups,
+    })
 }
 
 pub fn save(cfg: &Config) -> Result<()> {
@@ -95,9 +208,25 @@ pub fn save(cfg: &Config) -> Result<()> {
 fn format_config(cfg: &Config) -> String {
     let mut out = String::new();
     out.push_str(HEADER);
-    for g in &cfg.gestures {
-        out.push_str(&format_line(g));
-        out.push('\n');
+    out.push_str(&format!("enabled: {}\n", cfg.enabled));
+    out.push_str("groups:\n");
+    for grp in &cfg.groups {
+        out.push_str(&format!("  - name: {}\n", yaml_scalar(&grp.name)));
+        if !grp.enabled {
+            out.push_str("    enabled: false\n");
+        }
+        if !grp.apps.is_empty() {
+            out.push_str(&format!(
+                "    apps: [{}]\n",
+                grp.apps.iter().map(|a| yaml_scalar(a)).collect::<Vec<_>>().join(", ")
+            ));
+        }
+        out.push_str("    gestures:\n");
+        for g in &grp.gestures {
+            out.push_str("      ");
+            out.push_str(&format_gesture_line(g));
+            out.push('\n');
+        }
     }
     out
 }
@@ -105,20 +234,26 @@ fn format_config(cfg: &Config) -> String {
 const HEADER: &str = "\
 # arcglyph gesture bindings
 #
-# pattern: sequence of numpad-style direction digits
-#   7 8 9      up-left  up   up-right
-#   4 . 6      left     .    right
-#   1 2 3      down-left down down-right
-# apps:  list of app_id substrings (case-insensitive). empty = every window.
-# keys:  evdev key names pressed together as a chord.
-# label: free-form description shown in the GUI.
+# enabled: global switch. false disables all gestures.
+# groups: each group associates a set of apps with a list of gestures.
+#   name: display name for the group
+#   apps: list of app_id substrings (case-insensitive). empty = every window.
+#   gestures[*].pattern: sequence of numpad-style direction digits
+#     7 8 9      up-left  up   up-right
+#     4 . 6      left     .    right
+#     1 2 3      down-left down down-right
+#   gestures[*].keys: evdev key names pressed together as a chord.
+#   gestures[*].label: free-form description shown in the GUI.
 #
 ";
 
-fn format_line(g: &GestureCfg) -> String {
+fn format_gesture_line(g: &GestureCfg) -> String {
     let mut fields = Vec::<String>::new();
     if let Some(l) = &g.label {
         fields.push(format!("label: {}", yaml_scalar(l)));
+    }
+    if !g.enabled {
+        fields.push("enabled: false".to_string());
     }
     fields.push(format!("pattern: {}", yaml_scalar(&g.pattern)));
     fields.push(format!(
@@ -129,16 +264,6 @@ fn format_line(g: &GestureCfg) -> String {
             .collect::<Vec<_>>()
             .join(", ")
     ));
-    if !g.apps.is_empty() {
-        fields.push(format!(
-            "apps: [{}]",
-            g.apps
-                .iter()
-                .map(|a| yaml_scalar(a))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
     format!("- {{ {} }}", fields.join(", "))
 }
 
@@ -158,40 +283,27 @@ fn yaml_scalar(s: &str) -> String {
     }
 }
 
-impl GestureCfg {
-    pub fn from_gesture(g: Gesture) -> Self {
-        Self {
-            pattern: g.pattern,
-            keys: g.keys.iter().copied().map(keys::name).collect(),
-            apps: g.apps,
-            label: g.label,
-        }
-    }
-}
-
-pub fn defaults() -> Vec<Gesture> {
-    let chrome = ["google-chrome", "chromium", "microsoft-edge"];
-    vec![
-        chrome_gesture("4", &[Key::KEY_LEFTALT, Key::KEY_LEFT], "后退", &chrome),
-        chrome_gesture("6", &[Key::KEY_LEFTALT, Key::KEY_RIGHT], "前进", &chrome),
-        chrome_gesture("8", &[Key::KEY_HOME], "回到顶部", &chrome),
-        chrome_gesture("2", &[Key::KEY_END], "滚动到底部", &chrome),
-        chrome_gesture("26", &[Key::KEY_LEFTCTRL, Key::KEY_W], "关闭标签页", &chrome),
-        chrome_gesture(
-            "24",
-            &[Key::KEY_LEFTCTRL, Key::KEY_LEFTSHIFT, Key::KEY_T],
-            "恢复关闭的标签页",
-            &chrome,
-        ),
-        chrome_gesture("46", &[Key::KEY_F5], "刷新", &chrome),
-    ]
-}
-
-fn chrome_gesture(pattern: &str, keys: &[Key], label: &str, apps: &[&str]) -> Gesture {
-    Gesture {
-        pattern: pattern.into(),
-        keys: keys.to_vec(),
-        apps: apps.iter().map(|s| s.to_string()).collect(),
-        label: Some(label.into()),
+pub fn default_config() -> Config {
+    let chrome_apps = vec![
+        "google-chrome".to_string(),
+        "chromium".to_string(),
+        "microsoft-edge".to_string(),
+    ];
+    Config {
+        enabled: true,
+        groups: vec![GroupCfg {
+            name: "浏览器".to_string(),
+            apps: chrome_apps,
+            enabled: true,
+            gestures: vec![
+                GestureCfg { label: Some("后退".into()), pattern: "4".into(), keys: vec!["LEFTALT".into(), "LEFT".into()], enabled: true },
+                GestureCfg { label: Some("前进".into()), pattern: "6".into(), keys: vec!["LEFTALT".into(), "RIGHT".into()], enabled: true },
+                GestureCfg { label: Some("回到顶部".into()), pattern: "8".into(), keys: vec!["HOME".into()], enabled: true },
+                GestureCfg { label: Some("滚动到底部".into()), pattern: "2".into(), keys: vec!["END".into()], enabled: true },
+                GestureCfg { label: Some("关闭标签页".into()), pattern: "26".into(), keys: vec!["LEFTCTRL".into(), "W".into()], enabled: true },
+                GestureCfg { label: Some("恢复关闭的标签页".into()), pattern: "24".into(), keys: vec!["LEFTCTRL".into(), "LEFTSHIFT".into(), "T".into()], enabled: true },
+                GestureCfg { label: Some("刷新".into()), pattern: "46".into(), keys: vec!["F5".into()], enabled: true },
+            ],
+        }],
     }
 }

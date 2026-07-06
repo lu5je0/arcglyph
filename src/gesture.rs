@@ -1,13 +1,14 @@
 use crate::config::Gesture;
 use evdev::Key;
 
-pub const MOVE_THRESHOLD: i32 = 40;
+pub const MOVE_THRESHOLD: i32 = 60;
 pub const MIN_TOTAL_MOVE: i32 = 20;
 
 #[derive(Default)]
 pub struct GestureState {
     pub active: bool,
     pub bypass: bool,
+    pub overlay_started: bool,
     pub total_dx: i32,
     pub total_dy: i32,
     acc_dx: i32,
@@ -24,6 +25,7 @@ impl GestureState {
 
     pub fn start(&mut self, app_id: Option<String>) {
         self.active = true;
+        self.overlay_started = false;
         self.total_dx = 0;
         self.total_dy = 0;
         self.acc_dx = 0;
@@ -51,7 +53,7 @@ impl GestureState {
             }
             Some(prev) if prev == dir => {}
             Some(prev) => {
-                if sector_distance(prev, dir) >= 2 {
+                if sector_distance(prev, dir) >= 1 {
                     self.pattern.push(dir);
                     self.last_dir = Some(dir);
                 }
@@ -78,10 +80,28 @@ impl GestureState {
     }
 }
 
+pub fn has_gestures_for_app(gestures: &[Gesture], app_id: Option<&str>) -> bool {
+    let app_lower = app_id.map(|a| a.to_ascii_lowercase());
+    for g in gestures {
+        if !g.enabled {
+            continue;
+        }
+        if g.apps.is_empty() {
+            return true;
+        }
+        if let Some(ref app) = app_lower {
+            if g.apps.iter().any(|a| app.contains(&a.to_ascii_lowercase())) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub fn pick(gestures: &[Gesture], pattern: &str, app_id: Option<&str>) -> Option<Vec<Key>> {
     let app_lower = app_id.map(|a| a.to_ascii_lowercase());
     for g in gestures {
-        if g.pattern != pattern || g.apps.is_empty() {
+        if !g.enabled || g.pattern != pattern || g.apps.is_empty() {
             continue;
         }
         if let Some(ref app) = app_lower {
@@ -91,6 +111,9 @@ pub fn pick(gestures: &[Gesture], pattern: &str, app_id: Option<&str>) -> Option
         }
     }
     for g in gestures {
+        if !g.enabled {
+            continue;
+        }
         if g.pattern == pattern && g.apps.is_empty() {
             return Some(g.keys.clone());
         }
@@ -98,50 +121,38 @@ pub fn pick(gestures: &[Gesture], pattern: &str, app_id: Option<&str>) -> Option
     None
 }
 
-/// Quantize a motion vector into a numpad-style 8-way direction character.
+/// Quantize a motion vector into a 4-way cardinal direction character.
 /// Screen coordinates: y grows downward.
 ///
 /// Mapping (numpad layout):
-///   7 8 9         up-left  up    up-right
-///   4 . 6   =>    left     .     right
-///   1 2 3         dn-left  down  dn-right
+///     8         up
+///   4 . 6  =>  left . right
+///     2         down
+///
+/// Each direction covers a 90° sector, giving ±45° tolerance.
 fn classify(dx: f32, dy: f32) -> char {
-    let angle = dy.atan2(dx); // -pi..pi, 0 = +x (right)
-    let deg = angle.to_degrees();
-    // Rotate so that "right" is centered on sector 0 (-22.5..22.5).
-    let shifted = ((deg + 22.5).rem_euclid(360.0)) / 45.0;
-    match shifted as u32 {
-        0 => '6', // right
-        1 => '3', // down-right
-        2 => '2', // down
-        3 => '1', // down-left
-        4 => '4', // left
-        5 => '7', // up-left
-        6 => '8', // up
-        7 => '9', // up-right
-        _ => '6',
+    if dx.abs() >= dy.abs() {
+        if dx >= 0.0 { '6' } else { '4' }
+    } else {
+        if dy >= 0.0 { '2' } else { '8' }
     }
 }
 
-/// Minimum wrap-around distance between two 8-way direction letters.
-/// Distances: 0 (same), 1 (adjacent 45°), 2 (perpendicular 90°), … 4 (opposite).
+/// Minimum wrap-around distance between two 4-way direction letters.
+/// Distances: 0 (same), 1 (adjacent 90°), 2 (opposite 180°).
 fn sector_distance(a: char, b: char) -> u32 {
     let ia = sector_index(a);
     let ib = sector_index(b);
-    let d = (ia as i32 - ib as i32).rem_euclid(8) as u32;
-    d.min(8 - d)
+    let d = (ia as i32 - ib as i32).rem_euclid(4) as u32;
+    d.min(4 - d)
 }
 
 fn sector_index(c: char) -> u32 {
     match c {
         '6' => 0, // right
-        '3' => 1, // down-right
-        '2' => 2, // down
-        '1' => 3, // down-left
-        '4' => 4, // left
-        '7' => 5, // up-left
-        '8' => 6, // up
-        '9' => 7, // up-right
+        '2' => 1, // down
+        '4' => 2, // left
+        '8' => 3, // up
         _ => 0,
     }
 }
