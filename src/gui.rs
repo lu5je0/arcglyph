@@ -78,6 +78,10 @@ pub enum Msg {
     PatternBackspace(usize),
     PatternClear(usize),
     ToggleGesture(usize, bool),
+    // keyboard shortcut recording
+    StartRecordKeys(usize),
+    StopRecordKeys,
+    KeyRecordedEvent(iced::keyboard::Key, iced::keyboard::Modifiers),
     // top-right
     Save,
     Toast(String),
@@ -99,6 +103,7 @@ struct App {
     selected_group: usize,
     group_app_input: String,
     picking: bool,
+    recording_keys: Option<usize>,
 }
 
 impl App {
@@ -113,6 +118,7 @@ impl App {
                 selected_group: 0,
                 group_app_input: String::new(),
                 picking: false,
+                recording_keys: None,
             },
             Task::none(),
         )
@@ -123,10 +129,16 @@ impl App {
     }
 
     fn subscription(&self) -> Subscription<Msg> {
-        Subscription::batch([
+        let mut subs = vec![
             Subscription::run(tray_stream),
             window::close_events().map(Msg::WindowClosed),
-        ])
+        ];
+        if self.recording_keys.is_some() {
+            subs.push(iced::keyboard::on_key_press(|key, mods| {
+                Some(Msg::KeyRecordedEvent(key, mods))
+            }));
+        }
+        Subscription::batch(subs)
     }
 
     fn current_group(&self) -> Option<&GroupCfg> {
@@ -283,6 +295,49 @@ impl App {
                     }
                 }
             }
+            Msg::StartRecordKeys(i) => {
+                self.recording_keys = Some(i);
+            }
+            Msg::StopRecordKeys => {
+                self.recording_keys = None;
+            }
+            Msg::KeyRecordedEvent(key, mods) => {
+                if let Some(i) = self.recording_keys {
+                    // Escape cancels recording without changing anything.
+                    if matches!(key, iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape))
+                    {
+                        self.recording_keys = None;
+                        return Task::none();
+                    }
+                    // Ignore lone modifier presses; wait for a real key.
+                    if is_modifier_key(&key) {
+                        return Task::none();
+                    }
+                    if let Some(main) = evdev_name_from_iced(&key) {
+                        let mut names = Vec::new();
+                        if mods.control() {
+                            names.push("LEFTCTRL".to_string());
+                        }
+                        if mods.shift() {
+                            names.push("LEFTSHIFT".to_string());
+                        }
+                        if mods.alt() {
+                            names.push("LEFTALT".to_string());
+                        }
+                        if mods.logo() {
+                            names.push("LEFTMETA".to_string());
+                        }
+                        names.push(main);
+                        if let Some(grp) = self.cfg.groups.get_mut(self.selected_group) {
+                            if let Some(g) = grp.gestures.get_mut(i) {
+                                g.keys = names;
+                                self.dirty = true;
+                            }
+                        }
+                        self.recording_keys = None;
+                    }
+                }
+            }
             Msg::Save => match config::save(&self.cfg) {
                 Ok(()) => {
                     self.dirty = false;
@@ -388,7 +443,8 @@ impl App {
             let group_header = self.group_header_view(grp);
             let mut list = Column::new().spacing(10);
             for i in 0..grp.gestures.len() {
-                list = list.push(gesture_card(i, &grp.gestures[i]));
+                let recording = self.recording_keys == Some(i);
+                list = list.push(gesture_card(i, &grp.gestures[i], recording));
             }
             list = list.push(add_card());
             let body = scrollable(
@@ -641,13 +697,28 @@ fn group_app_chip<'a>(name: String) -> Element<'a, Msg> {
     .into()
 }
 
-fn gesture_card<'a>(i: usize, g: &'a GestureCfg) -> Element<'a, Msg> {
-    let keys_input = labeled_input(
-        "快捷键",
-        g.keys.join(" + "),
-        move |v| Msg::KeysChanged(i, v),
-        "LEFTCTRL + W",
-    );
+fn gesture_card<'a>(i: usize, g: &'a GestureCfg, recording: bool) -> Element<'a, Msg> {
+    let keys_field = text_input("LEFTCTRL + W", &g.keys.join(" + "))
+        .on_input(move |v| Msg::KeysChanged(i, v))
+        .padding(8)
+        .style(input_style);
+    let record_btn = button(
+        text(if recording { "按下快捷键…" } else { "录制" }).size(12),
+    )
+    .on_press(if recording {
+        Msg::StopRecordKeys
+    } else {
+        Msg::StartRecordKeys(i)
+    })
+    .padding([8, 12])
+    .style(secondary_button_style);
+    let keys_input: Element<'a, Msg> = column![
+        text("快捷键").size(11).color(muted()),
+        row![keys_field, record_btn].spacing(6),
+    ]
+    .spacing(4)
+    .width(Length::Fill)
+    .into();
     let label_input = labeled_input(
         "说明",
         g.label.clone().unwrap_or_default(),
@@ -952,6 +1023,76 @@ fn tray_stream() -> impl iced::futures::Stream<Item = Msg> {
             }
         }
     })
+}
+
+fn is_modifier_key(key: &iced::keyboard::Key) -> bool {
+    use iced::keyboard::key::Named;
+    matches!(
+        key,
+        iced::keyboard::Key::Named(
+            Named::Control | Named::Shift | Named::Alt | Named::Super
+        )
+    )
+}
+
+fn evdev_name_from_iced(key: &iced::keyboard::Key) -> Option<String> {
+    use iced::keyboard::key::Named;
+    match key {
+        iced::keyboard::Key::Character(s) => {
+            let c = s.chars().next()?;
+            let up = c.to_ascii_uppercase();
+            if up.is_ascii_alphanumeric() {
+                Some(up.to_string())
+            } else {
+                // Map common punctuation to evdev names.
+                match up {
+                    '-' => Some("MINUS".into()),
+                    '=' => Some("EQUAL".into()),
+                    '[' => Some("LEFTBRACE".into()),
+                    ']' => Some("RIGHTBRACE".into()),
+                    ';' => Some("SEMICOLON".into()),
+                    '\'' => Some("APOSTROPHE".into()),
+                    '`' => Some("GRAVE".into()),
+                    '\\' => Some("BACKSLASH".into()),
+                    ',' => Some("COMMA".into()),
+                    '.' => Some("DOT".into()),
+                    '/' => Some("SLASH".into()),
+                    _ => None,
+                }
+            }
+        }
+        iced::keyboard::Key::Named(named) => match named {
+            Named::Enter => Some("ENTER".into()),
+            Named::Tab => Some("TAB".into()),
+            Named::Space => Some("SPACE".into()),
+            Named::Backspace => Some("BACKSPACE".into()),
+            Named::Delete => Some("DELETE".into()),
+            Named::Insert => Some("INSERT".into()),
+            Named::Home => Some("HOME".into()),
+            Named::End => Some("END".into()),
+            Named::PageUp => Some("PAGEUP".into()),
+            Named::PageDown => Some("PAGEDOWN".into()),
+            Named::ArrowUp => Some("UP".into()),
+            Named::ArrowDown => Some("DOWN".into()),
+            Named::ArrowLeft => Some("LEFT".into()),
+            Named::ArrowRight => Some("RIGHT".into()),
+            Named::Escape => Some("ESC".into()),
+            Named::F1 => Some("F1".into()),
+            Named::F2 => Some("F2".into()),
+            Named::F3 => Some("F3".into()),
+            Named::F4 => Some("F4".into()),
+            Named::F5 => Some("F5".into()),
+            Named::F6 => Some("F6".into()),
+            Named::F7 => Some("F7".into()),
+            Named::F8 => Some("F8".into()),
+            Named::F9 => Some("F9".into()),
+            Named::F10 => Some("F10".into()),
+            Named::F11 => Some("F11".into()),
+            Named::F12 => Some("F12".into()),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn split_list(s: &str) -> Vec<String> {
