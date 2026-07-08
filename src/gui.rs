@@ -1,4 +1,5 @@
 use crate::config::{self, Config, GestureCfg, GroupCfg};
+use crate::i18n::{t, Lang, S};
 use iced::{
     alignment,
     stream,
@@ -36,7 +37,7 @@ pub fn try_send(msg: ExternalMsg) -> bool {
 }
 
 pub fn run() -> iced::Result {
-    let mut app = iced::daemon("手势偏好设置", App::update, App::view)
+    let mut app = iced::daemon(App::title, App::update, App::view)
         .theme(App::theme)
         .subscription(App::subscription);
     for path in FONT_CANDIDATES {
@@ -69,6 +70,7 @@ pub enum Msg {
     GroupDetachApp(String),
     ToggleGroup(bool),
     ToggleGlobal(bool),
+    SetLang(Lang),
     // gesture list
     AddGesture,
     RemoveGesture(usize),
@@ -124,6 +126,14 @@ impl App {
         )
     }
 
+    fn lang(&self) -> Lang {
+        self.cfg.lang
+    }
+
+    fn title(&self, _: window::Id) -> String {
+        t(self.lang(), S::WindowTitle).to_string()
+    }
+
     fn theme(&self, _: window::Id) -> Theme {
         Theme::Light
     }
@@ -162,8 +172,9 @@ impl App {
                 self.group_app_input.clear();
             }
             Msg::AddGroup => {
+                let name = t(self.lang(), S::NewGroup).to_string();
                 self.cfg.groups.push(GroupCfg {
-                    name: "新分组".to_string(),
+                    name,
                     apps: Vec::new(),
                     enabled: true,
                     gestures: Vec::new(),
@@ -224,12 +235,19 @@ impl App {
                     self.dirty = true;
                 }
             }
+            Msg::SetLang(l) => {
+                if self.cfg.lang != l {
+                    self.cfg.lang = l;
+                    self.dirty = true;
+                }
+            }
             Msg::AddGesture => {
+                let label = t(self.lang(), S::NewGesture).to_string();
                 if let Some(grp) = self.cfg.groups.get_mut(self.selected_group) {
                     grp.gestures.push(GestureCfg {
                         pattern: "6".into(),
                         keys: vec!["LEFTALT".into(), "RIGHT".into()],
-                        label: Some("新手势".into()),
+                        label: Some(label),
                         enabled: true,
                     });
                     self.dirty = true;
@@ -341,9 +359,15 @@ impl App {
             Msg::Save => match config::save(&self.cfg) {
                 Ok(()) => {
                     self.dirty = false;
-                    return Task::done(Msg::Toast("已保存".into()));
+                    return Task::done(Msg::Toast(t(self.lang(), S::Saved).into()));
                 }
-                Err(e) => return Task::done(Msg::Toast(format!("保存失败: {}", e))),
+                Err(e) => {
+                    return Task::done(Msg::Toast(format!(
+                        "{}{}",
+                        t(self.lang(), S::SaveFailedPrefix),
+                        e
+                    )))
+                }
             },
             Msg::PickApp => {
                 self.picking = true;
@@ -377,15 +401,19 @@ impl App {
                         }
                         return restore
                             .chain(focus)
-                            .chain(Task::done(Msg::Toast(format!("已添加: {}", app))));
+                            .chain(Task::done(Msg::Toast(format!(
+                                "{}{}",
+                                t(self.lang(), S::AddedPrefix),
+                                app
+                            ))));
                     }
                     return restore.chain(focus).chain(Task::done(Msg::Toast(
-                        "未检测到应用".into(),
+                        t(self.lang(), S::NoAppDetected).into(),
                     )));
                 }
             }
-            Msg::Toast(t) => {
-                self.toast = Some(t);
+            Msg::Toast(msg) => {
+                self.toast = Some(msg);
                 return Task::perform(
                     tokio::time::sleep(std::time::Duration::from_millis(1600)),
                     |_| Msg::ToastClear,
@@ -410,23 +438,33 @@ impl App {
     }
 
     fn view(&self, _id: window::Id) -> Element<'_, Msg> {
+        let lang = self.lang();
+        let next_lang = match lang {
+            Lang::En => Lang::Zh,
+            Lang::Zh => Lang::En,
+        };
+        let lang_label = match lang {
+            Lang::En => "中文",
+            Lang::Zh => "EN",
+        };
         let header = row![
             text(if let Some(grp) = self.current_group() {
-                format!("{} 手势", grp.name)
+                format!("{} {}", grp.name, t(lang, S::GesturesFor))
             } else {
-                "无分组".to_string()
+                t(lang, S::NoGroup).to_string()
             })
             .size(24),
             horizontal_space(),
+            action_button(lang_label, Msg::SetLang(next_lang), false),
             toggler(self.cfg.enabled)
                 .label(if self.cfg.enabled {
-                    "总开关：开"
+                    t(lang, S::MasterOn)
                 } else {
-                    "总开关：关"
+                    t(lang, S::MasterOff)
                 })
                 .on_toggle(Msg::ToggleGlobal)
                 .size(20),
-            action_button("保存", Msg::Save, self.dirty),
+            action_button(t(lang, S::Save), Msg::Save, self.dirty),
         ]
         .spacing(12)
         .align_y(alignment::Vertical::Center);
@@ -434,7 +472,11 @@ impl App {
         let subtitle = text(format!(
             "{} · {}",
             config::path().display(),
-            if self.dirty { "未保存" } else { "已同步" }
+            if self.dirty {
+                t(lang, S::Unsaved)
+            } else {
+                t(lang, S::Synced)
+            }
         ))
         .size(11)
         .color(muted());
@@ -444,9 +486,9 @@ impl App {
             let mut list = Column::new().spacing(10);
             for i in 0..grp.gestures.len() {
                 let recording = self.recording_keys == Some(i);
-                list = list.push(gesture_card(i, &grp.gestures[i], recording));
+                list = list.push(gesture_card(lang, i, &grp.gestures[i], recording));
             }
-            list = list.push(add_card());
+            list = list.push(add_card(lang));
             let body = scrollable(
                 container(column![group_header, list].spacing(16))
                     .padding([4, 4])
@@ -459,7 +501,7 @@ impl App {
                 header,
                 subtitle,
                 horizontal_rule(1),
-                container(text("请从左侧选择或添加分组").size(14).color(muted()))
+                container(text(t(lang, S::SelectOrAddGroup)).size(14).color(muted()))
                     .padding(40)
                     .width(Length::Fill)
                     .align_x(alignment::Horizontal::Center),
@@ -475,8 +517,8 @@ impl App {
 
         let mut wrapper = column![].spacing(0);
         wrapper = wrapper.push(root);
-        if let Some(t) = &self.toast {
-            wrapper = wrapper.push(container(toast(t)).padding([0, 24]));
+        if let Some(toast_msg) = &self.toast {
+            wrapper = wrapper.push(container(toast(toast_msg)).padding([0, 24]));
             root = row![];
             let _ = root;
         }
@@ -490,28 +532,28 @@ impl App {
     }
 
     fn group_header_view<'a>(&'a self, grp: &'a GroupCfg) -> Element<'a, Msg> {
+        let lang = self.lang();
         let name_row = row![
-            text("分组名称").size(11).color(muted()),
+            text(t(lang, S::GroupName)).size(11).color(muted()),
             Space::with_width(8),
-            text_input("分组名称", &grp.name)
+            text_input(t(lang, S::GroupName), &grp.name)
                 .on_input(Msg::GroupNameChanged)
                 .padding(8)
                 .style(input_style),
             Space::with_width(12),
-            checkbox("启用", grp.enabled).on_toggle(Msg::ToggleGroup),
+            checkbox(t(lang, S::Enabled), grp.enabled).on_toggle(Msg::ToggleGroup),
         ]
         .align_y(alignment::Vertical::Center);
 
+        let count_text = if grp.apps.is_empty() {
+            t(lang, S::AppliesAll).to_string()
+        } else {
+            format!("{} {}", grp.apps.len(), t(lang, S::LinkedCount))
+        };
         let apps_label = row![
-            text("关联应用").size(11).color(muted()),
+            text(t(lang, S::AssociatedApps)).size(11).color(muted()),
             horizontal_space(),
-            text(if grp.apps.is_empty() {
-                "适用于所有应用".to_string()
-            } else {
-                format!("已关联 {} 个", grp.apps.len())
-            })
-            .size(11)
-            .color(muted()),
+            text(count_text).size(11).color(muted()),
         ]
         .align_y(alignment::Vertical::Center);
 
@@ -537,20 +579,27 @@ impl App {
         }
 
         let add_row = row![
-            text_input("app_id 子串（例如 chrome）", &self.group_app_input)
+            text_input(t(lang, S::AppIdPlaceholder), &self.group_app_input)
                 .on_input(Msg::GroupAppInput)
                 .on_submit(Msg::GroupAttachApp)
                 .padding(6)
                 .size(12)
                 .style(input_style),
-            button(text("添加").size(12))
+            button(text(t(lang, S::Add)).size(12))
                 .on_press(Msg::GroupAttachApp)
                 .padding([6, 12])
                 .style(secondary_button_style),
-            button(text(if self.picking { "点击目标窗口…" } else { "拾取窗口" }).size(12))
-                .on_press(Msg::PickApp)
-                .padding([6, 12])
-                .style(secondary_button_style),
+            button(
+                text(if self.picking {
+                    t(lang, S::ClickTargetWindow)
+                } else {
+                    t(lang, S::PickWindow)
+                })
+                .size(12)
+            )
+            .on_press(Msg::PickApp)
+            .padding([6, 12])
+            .style(secondary_button_style),
         ]
         .spacing(6);
 
@@ -568,20 +617,21 @@ impl App {
     }
 
     fn sidebar_view(&self) -> Element<'_, Msg> {
+        let lang = self.lang();
         let mut col = Column::new()
             .spacing(2)
-            .push(text("分组").size(11).color(muted()))
+            .push(text(t(lang, S::Groups)).size(11).color(muted()))
             .push(Space::with_height(4));
 
         for (i, grp) in self.cfg.groups.iter().enumerate() {
             let selected = i == self.selected_group;
-            col = col.push(sidebar_group_row(i, grp, selected));
+            col = col.push(sidebar_group_row(lang, i, grp, selected));
         }
 
         col = col.push(Space::with_height(10));
         col = col.push(
             button(
-                row![text("+").size(14), text("添加分组").size(12)]
+                row![text("+").size(14), text(t(lang, S::AddGroup)).size(12)]
                     .spacing(6)
                     .align_y(alignment::Vertical::Center),
             )
@@ -619,9 +669,9 @@ impl App {
     }
 }
 
-fn sidebar_group_row<'a>(i: usize, grp: &'a GroupCfg, selected: bool) -> Element<'a, Msg> {
+fn sidebar_group_row<'a>(lang: Lang, i: usize, grp: &'a GroupCfg, selected: bool) -> Element<'a, Msg> {
     let subtitle = if grp.apps.is_empty() {
-        "全局".to_string()
+        t(lang, S::Global).to_string()
     } else {
         grp.apps.join(", ")
     };
@@ -697,13 +747,18 @@ fn group_app_chip<'a>(name: String) -> Element<'a, Msg> {
     .into()
 }
 
-fn gesture_card<'a>(i: usize, g: &'a GestureCfg, recording: bool) -> Element<'a, Msg> {
+fn gesture_card<'a>(lang: Lang, i: usize, g: &'a GestureCfg, recording: bool) -> Element<'a, Msg> {
     let keys_field = text_input("LEFTCTRL + W", &g.keys.join(" + "))
         .on_input(move |v| Msg::KeysChanged(i, v))
         .padding(8)
         .style(input_style);
     let record_btn = button(
-        text(if recording { "按下快捷键…" } else { "录制" }).size(12),
+        text(if recording {
+            t(lang, S::PressKeys)
+        } else {
+            t(lang, S::Record)
+        })
+        .size(12),
     )
     .on_press(if recording {
         Msg::StopRecordKeys
@@ -713,21 +768,21 @@ fn gesture_card<'a>(i: usize, g: &'a GestureCfg, recording: bool) -> Element<'a,
     .padding([8, 12])
     .style(secondary_button_style);
     let keys_input: Element<'a, Msg> = column![
-        text("快捷键").size(11).color(muted()),
+        text(t(lang, S::Shortcut)).size(11).color(muted()),
         row![keys_field, record_btn].spacing(6),
     ]
     .spacing(4)
     .width(Length::Fill)
     .into();
     let label_input = labeled_input(
-        "说明",
+        t(lang, S::Description),
         g.label.clone().unwrap_or_default(),
         move |v| Msg::LabelChanged(i, v),
-        "可选描述",
+        t(lang, S::OptionalDescription),
     );
 
     let pattern_preview = if g.pattern.is_empty() {
-        "（未设置）".to_string()
+        t(lang, S::Unset).to_string()
     } else {
         g.pattern.chars().map(pattern_arrow).collect()
     };
@@ -735,8 +790,13 @@ fn gesture_card<'a>(i: usize, g: &'a GestureCfg, recording: bool) -> Element<'a,
     let title_row = row![
         text(pattern_preview).size(26),
         column![
-            text(g.label.clone().unwrap_or_else(|| "未命名".into())).size(15),
-            text(direction_words(&g.pattern)).size(11).color(muted()),
+            text(
+                g.label
+                    .clone()
+                    .unwrap_or_else(|| t(lang, S::Unnamed).into())
+            )
+            .size(15),
+            text(direction_words(lang, &g.pattern)).size(11).color(muted()),
         ]
         .spacing(2),
         horizontal_space(),
@@ -750,14 +810,14 @@ fn gesture_card<'a>(i: usize, g: &'a GestureCfg, recording: bool) -> Element<'a,
     let pad_row = row![
         pad,
         column![
-            text("拖动方向").size(11).color(muted()),
+            text(t(lang, S::DragDirection)).size(11).color(muted()),
             Space::with_height(4),
             row![
-                button(text("← 删除").size(11))
+                button(text(t(lang, S::Delete)).size(11))
                     .on_press(Msg::PatternBackspace(i))
                     .padding([4, 10])
                     .style(secondary_button_style),
-                button(text("清空").size(11))
+                button(text(t(lang, S::Clear)).size(11))
                     .on_press(Msg::PatternClear(i))
                     .padding([4, 10])
                     .style(secondary_button_style),
@@ -796,10 +856,10 @@ fn pattern_pad<'a>(i: usize) -> Element<'a, Msg> {
     column![r1, r2, r3].spacing(4).into()
 }
 
-fn add_card<'a>() -> Element<'a, Msg> {
+fn add_card<'a>(lang: Lang) -> Element<'a, Msg> {
     container(
         button(
-            row![text("+").size(18), text("添加手势").size(14)]
+            row![text("+").size(18), text(t(lang, S::AddGesture)).size(14)]
                 .spacing(8)
                 .align_y(alignment::Vertical::Center),
         )
@@ -1116,17 +1176,17 @@ fn pattern_arrow(c: char) -> char {
     }
 }
 
-fn direction_words(p: &str) -> String {
+fn direction_words(lang: Lang, p: &str) -> String {
     p.chars()
         .map(|c| match c {
-            '8' => "上",
-            '2' => "下",
-            '4' => "左",
-            '6' => "右",
-            '7' => "左上",
-            '9' => "右上",
-            '1' => "左下",
-            '3' => "右下",
+            '8' => t(lang, S::DirUp),
+            '2' => t(lang, S::DirDown),
+            '4' => t(lang, S::DirLeft),
+            '6' => t(lang, S::DirRight),
+            '7' => t(lang, S::DirUpLeft),
+            '9' => t(lang, S::DirUpRight),
+            '1' => t(lang, S::DirDownLeft),
+            '3' => t(lang, S::DirDownRight),
             _ => "?",
         })
         .collect::<Vec<_>>()

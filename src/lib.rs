@@ -4,6 +4,7 @@ pub mod devices;
 pub mod focus;
 pub mod gesture;
 pub mod gui;
+pub mod i18n;
 pub mod injector;
 pub mod keys;
 pub mod overlay;

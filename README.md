@@ -56,25 +56,27 @@ apps with a list of gestures:
 
 ```yaml
 enabled: true
+lang: en
 groups:
-  - name: 浏览器
+  - name: Browser
     apps: [google-chrome, chromium, microsoft-edge]
     gestures:
-      - {label: 后退, pattern: "4", keys: [LEFTALT, LEFT]}
-      - {label: 前进, pattern: "6", keys: [LEFTALT, RIGHT]}
-      - {label: 回到顶部, pattern: "8", keys: [HOME]}
-      - {label: 滚动到底部, pattern: "2", keys: [END]}
-      - {label: 关闭标签页, pattern: "26", keys: [LEFTCTRL, W]}
-      - {label: 恢复关闭的标签页, pattern: "24", keys: [LEFTCTRL, LEFTSHIFT, T]}
-      - {label: 刷新, pattern: "46", keys: [F5]}
-  - name: 全局
+      - {label: Back, pattern: "4", keys: [LEFTALT, LEFT]}
+      - {label: Forward, pattern: "6", keys: [LEFTALT, RIGHT]}
+      - {label: Scroll to top, pattern: "8", keys: [HOME]}
+      - {label: Scroll to bottom, pattern: "2", keys: [END]}
+      - {label: Close tab, pattern: "26", keys: [LEFTCTRL, W]}
+      - {label: Reopen closed tab, pattern: "24", keys: [LEFTCTRL, LEFTSHIFT, T]}
+      - {label: Reload, pattern: "46", keys: [F5]}
+  - name: Global
     apps: []
     gestures:
-      - {label: 切换窗口, pattern: "46", keys: [LEFTALT, TAB]}
+      - {label: Switch window, pattern: "46", keys: [LEFTALT, TAB]}
 ```
 
 Fields:
 
+- `lang` — GUI language: `en` (default) or `zh`. Toggle it from the header button.
 - `groups[*].name` — display name shown in the GUI.
 - `groups[*].apps` — list of app_id substrings (case-insensitive). Empty means "every window".
 - `groups[*].gestures[*].pattern` — numpad-direction sequence.
@@ -89,8 +91,10 @@ Config changes are detected automatically via inotify — no restart needed.
 Left-click the tray icon or pick **Preferences…** to open the editor.
 
 - Sidebar lists gesture groups; select one to edit its gestures
-- Each group can associate multiple apps via chips or the **拾取窗口** button
-- **拾取窗口**: click the button, then click any window — its app_id is automatically added to the group
+- Each group can associate multiple apps via chips or the **Pick window** button
+- **Pick window**: click the button, then click any window — its app_id is automatically added to the group
+- Set a shortcut by clicking **Record** and pressing the key combo directly
+- Switch the interface language (English / 中文) from the header button
 - Closing the window keeps the daemon running; **Quit** stops everything
 
 ## Notes

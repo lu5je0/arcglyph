@@ -3,12 +3,15 @@ use evdev::Key;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf};
 
+use crate::i18n::Lang;
 use crate::keys;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default)]
+    pub lang: Lang,
     #[serde(default)]
     pub groups: Vec<GroupCfg>,
 }
@@ -21,6 +24,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             enabled: true,
+            lang: Lang::default(),
             groups: Vec::new(),
         }
     }
@@ -192,6 +196,7 @@ fn parse_config(text: &str) -> Result<Config> {
 
     Ok(Config {
         enabled: legacy.enabled,
+        lang: Lang::default(),
         groups,
     })
 }
@@ -209,6 +214,13 @@ fn format_config(cfg: &Config) -> String {
     let mut out = String::new();
     out.push_str(HEADER);
     out.push_str(&format!("enabled: {}\n", cfg.enabled));
+    out.push_str(&format!(
+        "lang: {}\n",
+        match cfg.lang {
+            Lang::En => "en",
+            Lang::Zh => "zh",
+        }
+    ));
     out.push_str("groups:\n");
     for grp in &cfg.groups {
         out.push_str(&format!("  - name: {}\n", yaml_scalar(&grp.name)));
@@ -235,6 +247,7 @@ const HEADER: &str = "\
 # arcglyph gesture bindings
 #
 # enabled: global switch. false disables all gestures.
+# lang: GUI language. \"en\" (default) or \"zh\".
 # groups: each group associates a set of apps with a list of gestures.
 #   name: display name for the group
 #   apps: list of app_id substrings (case-insensitive). empty = every window.
@@ -291,18 +304,19 @@ pub fn default_config() -> Config {
     ];
     Config {
         enabled: true,
+        lang: Lang::default(),
         groups: vec![GroupCfg {
-            name: "浏览器".to_string(),
+            name: "Browser".to_string(),
             apps: chrome_apps,
             enabled: true,
             gestures: vec![
-                GestureCfg { label: Some("后退".into()), pattern: "4".into(), keys: vec!["LEFTALT".into(), "LEFT".into()], enabled: true },
-                GestureCfg { label: Some("前进".into()), pattern: "6".into(), keys: vec!["LEFTALT".into(), "RIGHT".into()], enabled: true },
-                GestureCfg { label: Some("回到顶部".into()), pattern: "8".into(), keys: vec!["HOME".into()], enabled: true },
-                GestureCfg { label: Some("滚动到底部".into()), pattern: "2".into(), keys: vec!["END".into()], enabled: true },
-                GestureCfg { label: Some("关闭标签页".into()), pattern: "26".into(), keys: vec!["LEFTCTRL".into(), "W".into()], enabled: true },
-                GestureCfg { label: Some("恢复关闭的标签页".into()), pattern: "24".into(), keys: vec!["LEFTCTRL".into(), "LEFTSHIFT".into(), "T".into()], enabled: true },
-                GestureCfg { label: Some("刷新".into()), pattern: "46".into(), keys: vec!["F5".into()], enabled: true },
+                GestureCfg { label: Some("Back".into()), pattern: "4".into(), keys: vec!["LEFTALT".into(), "LEFT".into()], enabled: true },
+                GestureCfg { label: Some("Forward".into()), pattern: "6".into(), keys: vec!["LEFTALT".into(), "RIGHT".into()], enabled: true },
+                GestureCfg { label: Some("Scroll to top".into()), pattern: "8".into(), keys: vec!["HOME".into()], enabled: true },
+                GestureCfg { label: Some("Scroll to bottom".into()), pattern: "2".into(), keys: vec!["END".into()], enabled: true },
+                GestureCfg { label: Some("Close tab".into()), pattern: "26".into(), keys: vec!["LEFTCTRL".into(), "W".into()], enabled: true },
+                GestureCfg { label: Some("Reopen closed tab".into()), pattern: "24".into(), keys: vec!["LEFTCTRL".into(), "LEFTSHIFT".into(), "T".into()], enabled: true },
+                GestureCfg { label: Some("Reload".into()), pattern: "46".into(), keys: vec!["F5".into()], enabled: true },
             ],
         }],
     }
