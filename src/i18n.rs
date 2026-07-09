@@ -64,6 +64,11 @@ pub enum S {
     DirUpRight,
     DirDownLeft,
     DirDownRight,
+    PermTitle,
+    PermBody,
+    PermFixHint,
+    AutostartOn,
+    AutostartOff,
 }
 
 pub fn t(lang: Lang, s: S) -> &'static str {
@@ -122,6 +127,11 @@ fn en(s: S) -> &'static str {
         S::DirUpRight => "Up-Right",
         S::DirDownLeft => "Down-Left",
         S::DirDownRight => "Down-Right",
+        S::PermTitle => "Input permission required",
+        S::PermBody => "Arcglyph can't access the input devices, so gestures won't work. This usually means your user isn't in the 'input' group yet.",
+        S::PermFixHint => "Run:  sudo usermod -aG input $USER  — then log out and back in.",
+        S::AutostartOn => "Autostart: On",
+        S::AutostartOff => "Autostart: Off",
     }
 }
 
@@ -174,5 +184,10 @@ fn zh(s: S) -> &'static str {
         S::DirUpRight => "右上",
         S::DirDownLeft => "左下",
         S::DirDownRight => "右下",
+        S::PermTitle => "需要输入设备权限",
+        S::PermBody => "Arcglyph 无法访问输入设备，手势将无法工作。通常是因为当前用户还没有加入 input 用户组。",
+        S::PermFixHint => "执行： sudo usermod -aG input $USER  然后注销并重新登录。",
+        S::AutostartOn => "开机自启：开",
+        S::AutostartOff => "开机自启：关",
     }
 }

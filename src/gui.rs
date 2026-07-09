@@ -70,6 +70,7 @@ pub enum Msg {
     GroupDetachApp(String),
     ToggleGroup(bool),
     ToggleGlobal(bool),
+    ToggleAutostart(bool),
     SetLang(Lang),
     // gesture list
     AddGesture,
@@ -106,6 +107,8 @@ struct App {
     group_app_input: String,
     picking: bool,
     recording_keys: Option<usize>,
+    perms_ok: bool,
+    autostart: bool,
 }
 
 impl App {
@@ -121,6 +124,8 @@ impl App {
                 group_app_input: String::new(),
                 picking: false,
                 recording_keys: None,
+                perms_ok: crate::perms::probe().ok(),
+                autostart: crate::autostart::is_enabled(),
             },
             Task::none(),
         )
@@ -235,6 +240,24 @@ impl App {
                     self.dirty = true;
                 }
             }
+            Msg::ToggleAutostart(v) => match crate::autostart::set(v) {
+                Ok(()) => {
+                    self.autostart = v;
+                    let label = if v {
+                        t(self.lang(), S::AutostartOn)
+                    } else {
+                        t(self.lang(), S::AutostartOff)
+                    };
+                    return Task::done(Msg::Toast(label.into()));
+                }
+                Err(e) => {
+                    return Task::done(Msg::Toast(format!(
+                        "{}{}",
+                        t(self.lang(), S::SaveFailedPrefix),
+                        e
+                    )))
+                }
+            },
             Msg::SetLang(l) => {
                 if self.cfg.lang != l {
                     self.cfg.lang = l;
@@ -464,6 +487,14 @@ impl App {
                 })
                 .on_toggle(Msg::ToggleGlobal)
                 .size(20),
+            toggler(self.autostart)
+                .label(if self.autostart {
+                    t(lang, S::AutostartOn)
+                } else {
+                    t(lang, S::AutostartOff)
+                })
+                .on_toggle(Msg::ToggleAutostart)
+                .size(20),
             action_button(t(lang, S::Save), Msg::Save, self.dirty),
         ]
         .spacing(12)
@@ -516,6 +547,9 @@ impl App {
         .spacing(0);
 
         let mut wrapper = column![].spacing(0);
+        if !self.perms_ok {
+            wrapper = wrapper.push(perm_banner(lang));
+        }
         wrapper = wrapper.push(root);
         if let Some(toast_msg) = &self.toast {
             wrapper = wrapper.push(container(toast(toast_msg)).padding([0, 24]));
@@ -958,6 +992,35 @@ fn icon_button<'a>(label: &'a str, msg: Msg) -> Element<'a, Msg> {
             border: Border {
                 radius: 6.0.into(),
                 ..Default::default()
+            },
+            ..Default::default()
+        })
+        .into()
+}
+
+fn perm_banner<'a>(lang: Lang) -> Element<'a, Msg> {
+    let inner = column![
+        text(t(lang, S::PermTitle))
+            .size(14)
+            .color(Color::from_rgb(0.55, 0.35, 0.0)),
+        text(t(lang, S::PermBody))
+            .size(12)
+            .color(Color::from_rgb(0.4, 0.3, 0.1)),
+        text(t(lang, S::PermFixHint))
+            .size(12)
+            .color(Color::from_rgb(0.3, 0.25, 0.1)),
+    ]
+    .spacing(4);
+
+    container(inner)
+        .padding([10, 24])
+        .width(Length::Fill)
+        .style(|_theme| container::Style {
+            background: Some(Background::Color(Color::from_rgb(1.0, 0.96, 0.85))),
+            border: Border {
+                width: 1.0,
+                color: Color::from_rgba(0.85, 0.6, 0.0, 0.4),
+                radius: 0.0.into(),
             },
             ..Default::default()
         })

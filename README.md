@@ -26,12 +26,11 @@ draws a smooth blue trail while you move.
 # 2. Build
 cargo build --release
 
-# 3. Install a desktop entry + KDE autostart (optional)
-./install-desktop.sh
-
-# 4. Run
+# 3. Run
 ./target/release/arcglyph
 ```
+
+Enable "Autostart" from the GUI header to launch arcglyph with your session.
 
 ## Gestures
 

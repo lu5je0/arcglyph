@@ -1,3 +1,4 @@
+pub mod autostart;
 pub mod config;
 pub mod daemon;
 pub mod devices;
@@ -8,4 +9,5 @@ pub mod i18n;
 pub mod injector;
 pub mod keys;
 pub mod overlay;
+pub mod perms;
 pub mod tray;
