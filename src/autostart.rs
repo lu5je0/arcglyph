@@ -41,7 +41,7 @@ pub fn set(enabled: bool) -> Result<()> {
              Name=Arcglyph\n\
              GenericName=Mouse Gestures\n\
              Comment=Right-click drag mouse gesture daemon for Wayland\n\
-             Exec={}\n\
+             Exec={} --hidden\n\
              Icon=input-mouse\n\
              Terminal=false\n\
              Categories=Utility;Settings;\n\

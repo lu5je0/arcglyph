@@ -50,15 +50,19 @@ fn main() {
     // Kick off an initial "show" so the window appears on first launch;
     // afterwards the user goes through the tray. If the outbound channel
     // isn't ready yet the message is dropped and we retry once the runtime
-    // is up.
-    thread::spawn(|| {
-        for _ in 0..100 {
-            if gui::try_send(ExternalMsg::Show) {
-                break;
+    // is up. When launched with --hidden (e.g. via autostart at login),
+    // skip this so the app stays in the tray without showing the window.
+    let start_hidden = std::env::args().any(|a| a == "--hidden");
+    if !start_hidden {
+        thread::spawn(|| {
+            for _ in 0..100 {
+                if gui::try_send(ExternalMsg::Show) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
             }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-    });
+        });
+    }
 
     if let Err(e) = gui::run() {
         eprintln!("arcglyph gui error: {:#}", e);
