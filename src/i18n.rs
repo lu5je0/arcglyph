@@ -67,6 +67,10 @@ pub enum S {
     PermTitle,
     PermBody,
     PermFixHint,
+    PermFixButton,
+    PermFixRunning,
+    PermFixDone,
+    PermFixFailedPrefix,
     AutostartOn,
     AutostartOff,
 }
@@ -130,6 +134,10 @@ fn en(s: S) -> &'static str {
         S::PermTitle => "Input permission required",
         S::PermBody => "Arcglyph can't access the input devices, so gestures won't work. This usually means your user isn't in the 'input' group yet.",
         S::PermFixHint => "Run:  sudo usermod -aG input $USER  — then log out and back in.",
+        S::PermFixButton => "Fix automatically (asks for sudo)",
+        S::PermFixRunning => "Fixing…",
+        S::PermFixDone => "Done. Log out and back in to apply.",
+        S::PermFixFailedPrefix => "Fix failed: ",
         S::AutostartOn => "Autostart: On",
         S::AutostartOff => "Autostart: Off",
     }
@@ -187,6 +195,10 @@ fn zh(s: S) -> &'static str {
         S::PermTitle => "需要输入设备权限",
         S::PermBody => "Arcglyph 无法访问输入设备，手势将无法工作。通常是因为当前用户还没有加入 input 用户组。",
         S::PermFixHint => "执行： sudo usermod -aG input $USER  然后注销并重新登录。",
+        S::PermFixButton => "一键修复（需要 sudo 授权）",
+        S::PermFixRunning => "正在修复…",
+        S::PermFixDone => "已修复。注销并重新登录后生效。",
+        S::PermFixFailedPrefix => "修复失败：",
         S::AutostartOn => "开机自启：开",
         S::AutostartOff => "开机自启：关",
     }

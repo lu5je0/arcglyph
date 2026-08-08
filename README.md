@@ -1,17 +1,19 @@
 # Arcglyph
 
-Elegant mouse-gesture daemon for Wayland (KDE Plasma).
+Elegant mouse-gesture daemon for Wayland (KDE Plasma & GNOME).
 
 Hold **right mouse button**, draw a shape, release. Arcglyph recognizes the
 gesture, forwards the mapped keyboard shortcut to the focused app, and
 draws a smooth blue trail while you move.
 
 - Gesture recognition via evdev grab + uinput injection
-- KWin-native focused-window detection through the Scripting DBus API
+- Focused-window detection: KWin Scripting DBus API on KDE, companion shell
+  extension on GNOME
 - Per-app gesture groups — one group can cover multiple apps
 - Configurable via YAML or an inline GUI editor
 - Config hot-reload — save in GUI and changes apply instantly
-- Wayland-first: overlay drawn through `wlr-layer-shell`, no X11 involved
+- Wayland-first: overlay drawn through `wlr-layer-shell` (KDE) or the shell
+  extension (GNOME), no X11 involved
 - Single binary, ships with a system-tray control (StatusNotifierItem)
 - Fullscreen windows are auto-bypassed — games and video players stay untouched
 - Smart bypass: apps without configured gestures get normal right-click behavior
@@ -31,6 +33,26 @@ cargo build --release
 ```
 
 Enable "Autostart" from the GUI header to launch arcglyph with your session.
+
+## GNOME
+
+Mutter has no scripting API or `wlr-layer-shell`, so on GNOME arcglyph relies
+on the bundled **Arcglyph Helper** shell extension for focused-window
+detection and trail drawing:
+
+```
+# Install the extension (also auto-synced on every launch in a GNOME session)
+arcglyph --install-gnome-extension
+
+# --- log out, log back in ---
+
+gnome-extensions enable arcglyph@lu5je0.github.io
+```
+
+Without the extension, gestures stay in bypass mode (normal right-click).
+The tray icon additionally needs the
+[AppIndicator](https://extensions.gnome.org/extension/615/appindicator-support/)
+extension, as GNOME does not support StatusNotifierItem out of the box.
 
 ## Gestures
 

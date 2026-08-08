@@ -1,0 +1,16 @@
+post_install() {
+  cat <<'EOF'
+==> arcglyph needs input access. Run once, then log out and back in:
+
+      sudo usermod -aG input "$USER"
+
+    The uinput udev rule is already installed; it applies after the next
+    reboot, or immediately with:
+
+      sudo udevadm control --reload && sudo udevadm trigger
+EOF
+}
+
+post_upgrade() {
+  post_install
+}

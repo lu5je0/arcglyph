@@ -191,14 +191,16 @@ impl FocusTracker {
         (g.app_id.clone(), g.fullscreen, g.cursor_inside)
     }
 
+    fn store(&self, app: String, fullscreen: bool, cursor_inside: bool) {
+        let mut g = self.inner.lock().unwrap();
+        g.app_id = if app.is_empty() { None } else { Some(app) };
+        g.fullscreen = fullscreen;
+        g.cursor_inside = cursor_inside;
+    }
+
     fn refresh(&self) {
         match query() {
-            Ok((app, fs, cursor_inside)) => {
-                let mut g = self.inner.lock().unwrap();
-                g.app_id = if app.is_empty() { None } else { Some(app) };
-                g.fullscreen = fs;
-                g.cursor_inside = cursor_inside;
-            }
+            Ok((app, fs, cursor_inside)) => self.store(app, fs, cursor_inside),
             Err(_) => {
                 // keep last-known values on transient errors
             }
@@ -214,16 +216,55 @@ impl FocusHandle {
     }
 }
 
+const POLL_INTERVAL: Duration = Duration::from_millis(300);
+
 pub fn spawn() -> Result<(FocusTracker, FocusHandle)> {
     let tracker = FocusTracker::default();
-    tracker.refresh(); // seed
+    let desktop = crate::desktop::detect();
     let t2 = tracker.clone();
     std::thread::Builder::new()
         .name("arcglyph-focus".into())
-        .spawn(move || loop {
-            std::thread::sleep(std::time::Duration::from_millis(300));
-            t2.refresh();
+        .spawn(move || match desktop {
+            crate::desktop::Desktop::Gnome => gnome_loop(t2),
+            _ => kwin_loop(t2),
         })
         .context("spawn focus polling thread")?;
     Ok((tracker, FocusHandle))
+}
+
+fn kwin_loop(tracker: FocusTracker) {
+    loop {
+        tracker.refresh();
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+fn gnome_loop(tracker: FocusTracker) {
+    let mut helper: Option<crate::gnome::Helper> = None;
+    let mut warned = false;
+    loop {
+        if helper.is_none() {
+            helper = crate::gnome::Helper::connect().ok();
+        }
+        if let Some(h) = helper.as_ref() {
+            match h.get_focus() {
+                Ok((app, fs, cursor_inside)) => {
+                    tracker.store(app, fs, cursor_inside);
+                    warned = false;
+                }
+                Err(e) => {
+                    if !warned {
+                        eprintln!(
+                            "gnome focus query failed (is the '{}' GNOME Shell \
+                             extension installed and enabled?): {:#}",
+                            crate::gnome::EXTENSION_UUID,
+                            e
+                        );
+                        warned = true;
+                    }
+                }
+            }
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
 }

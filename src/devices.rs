@@ -4,6 +4,7 @@ use std::fs;
 
 pub fn find_mice() -> Result<Vec<Device>> {
     let mut out = Vec::new();
+    let mut perm_blocked = false;
     for entry in fs::read_dir("/dev/input")? {
         let path = entry?.path();
         let name = match path.file_name().and_then(|s| s.to_str()) {
@@ -15,7 +16,10 @@ pub fn find_mice() -> Result<Vec<Device>> {
         }
         let dev = match Device::open(&path) {
             Ok(d) => d,
-            Err(_) => continue,
+            Err(e) => {
+                perm_blocked |= e.kind() == std::io::ErrorKind::PermissionDenied;
+                continue;
+            }
         };
         let has_right = dev
             .supported_keys()
@@ -35,6 +39,13 @@ pub fn find_mice() -> Result<Vec<Device>> {
         }
     }
     if out.is_empty() {
+        if perm_blocked {
+            return Err(anyhow!(
+                "no mouse device with BTN_RIGHT + REL_X/Y found (input devices are not readable)\n\
+                 hint: add your user to the input group, then log out and back in:\n  \
+                 sudo usermod -aG input $USER"
+            ));
+        }
         return Err(anyhow!("no mouse device with BTN_RIGHT + REL_X/Y found"));
     }
     Ok(out)

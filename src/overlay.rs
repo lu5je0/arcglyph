@@ -41,11 +41,18 @@ pub enum Cmd {
 pub struct Overlay {
     tx: mpsc::Sender<Cmd>,
     handle: Option<JoinHandle<()>>,
-    wakeup: OwnedFd,
+    wakeup: Option<OwnedFd>,
 }
 
 impl Overlay {
     pub fn spawn() -> Result<Self> {
+        match crate::desktop::detect() {
+            crate::desktop::Desktop::Gnome => Self::spawn_gnome(),
+            _ => Self::spawn_layer_shell(),
+        }
+    }
+
+    fn spawn_layer_shell() -> Result<Self> {
         let (tx, rx) = mpsc::channel::<Cmd>();
         let (read_fd, write_fd) =
             nix::unistd::pipe().context("overlay wakeup pipe")?;
@@ -61,20 +68,63 @@ impl Overlay {
         Ok(Overlay {
             tx,
             handle: Some(handle),
-            wakeup: write_owned,
+            wakeup: Some(write_owned),
+        })
+    }
+
+    // GNOME's Mutter has no wlr-layer-shell; the trail is drawn by the
+    // Arcglyph Helper shell extension, driven over DBus. The extension
+    // samples the pointer itself, so Move commands are not forwarded.
+    fn spawn_gnome() -> Result<Self> {
+        let (tx, rx) = mpsc::channel::<Cmd>();
+        let handle = thread::Builder::new()
+            .name("arcglyph-overlay".into())
+            .spawn(move || {
+                let mut helper: Option<crate::gnome::Helper> = None;
+                let mut warned = false;
+                while let Ok(cmd) = rx.recv() {
+                    if helper.is_none() {
+                        helper = crate::gnome::Helper::connect().ok();
+                    }
+                    let Some(h) = helper.as_ref() else { continue };
+                    let res = match cmd {
+                        Cmd::Start => h.trail_start(),
+                        Cmd::Finish => h.trail_end(),
+                        Cmd::Move(_, _) => Ok(()),
+                        Cmd::Quit => break,
+                    };
+                    match res {
+                        Ok(()) => warned = false,
+                        Err(e) => {
+                            if !warned {
+                                eprintln!("gnome trail overlay error: {:#}", e);
+                                warned = true;
+                            }
+                        }
+                    }
+                }
+            })?;
+        Ok(Overlay {
+            tx,
+            handle: Some(handle),
+            wakeup: None,
         })
     }
 
     pub fn send(&self, cmd: Cmd) {
         let _ = self.tx.send(cmd);
-        let _ = nix::unistd::write(&self.wakeup, &[1u8]);
+        if let Some(w) = &self.wakeup {
+            let _ = nix::unistd::write(w, &[1u8]);
+        }
     }
 }
 
 impl Drop for Overlay {
     fn drop(&mut self) {
         let _ = self.tx.send(Cmd::Quit);
-        let _ = nix::unistd::write(&self.wakeup, &[1u8]);
+        if let Some(w) = &self.wakeup {
+            let _ = nix::unistd::write(w, &[1u8]);
+        }
         if let Some(h) = self.handle.take() {
             let _ = h.join();
         }
@@ -310,7 +360,7 @@ impl State {
             let path = build_smooth_path(&self.points);
             if let Some(path) = path {
                 // outer white halo (two additive passes)
-                for (thickness, alpha) in [(22.0f32, 0.10f32), (13.0, 0.22)] {
+                for (thickness, alpha) in [(14.0f32, 0.10f32), (9.0, 0.22)] {
                     let mut paint = Paint::default();
                     paint.set_color(Color::from_rgba(1.0, 1.0, 1.0, alpha).unwrap());
                     paint.anti_alias = true;

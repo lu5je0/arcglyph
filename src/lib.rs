@@ -1,9 +1,11 @@
 pub mod autostart;
 pub mod config;
 pub mod daemon;
+pub mod desktop;
 pub mod devices;
 pub mod focus;
 pub mod gesture;
+pub mod gnome;
 pub mod gui;
 pub mod i18n;
 pub mod injector;

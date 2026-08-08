@@ -1,0 +1,39 @@
+# Maintainer: lu5je0 <lu5je0@gmail.com>
+pkgname=arcglyph
+pkgver=0.5.0
+pkgrel=1
+pkgdesc="Elegant right-click mouse-gesture daemon for Wayland (KDE Plasma & GNOME)"
+arch=('x86_64')
+url="https://github.com/lu5je0/arcglyph"
+license=('MIT')
+depends=('gcc-libs' 'glibc' 'wayland' 'libxkbcommon' 'dbus' 'fontconfig')
+makedepends=('cargo' 'pkgconf')
+optdepends=('vulkan-icd-loader: GPU-accelerated overlay rendering'
+            'kwin: focused-window detection on KDE Plasma'
+            'gnome-shell: GNOME support via bundled helper extension (arcglyph --install-gnome-extension)')
+install="$pkgname.install"
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('1ecfbae9ce3d72d717a05f43a9f61f649b6bed7320e3f7e899070e67cfd47287')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 "target/release/$pkgname" "$pkgdir/usr/bin/$pkgname"
+  install -Dm644 "packaging/$pkgname.desktop" \
+    "$pkgdir/usr/share/applications/$pkgname.desktop"
+  install -Dm644 "packaging/60-$pkgname-uinput.rules" \
+    "$pkgdir/usr/lib/udev/rules.d/60-$pkgname-uinput.rules"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

@@ -8,6 +8,31 @@ use arcglyph::{
 use ksni::TrayMethods;
 
 fn main() {
+    if std::env::args().any(|a| a == "--install-gnome-extension") {
+        match arcglyph::gnome::install_extension() {
+            Ok(dir) => {
+                println!("extension installed to {}", dir.display());
+                println!(
+                    "enable it with: gnome-extensions enable {}\n(then log out and back in)",
+                    arcglyph::gnome::EXTENSION_UUID
+                );
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("failed to install gnome extension: {:#}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // On GNOME, keep the bundled helper extension files in sync so upgrades
+    // take effect after the next shell restart. Enabling it stays manual.
+    if arcglyph::desktop::detect() == arcglyph::desktop::Desktop::Gnome {
+        if let Err(e) = arcglyph::gnome::install_extension() {
+            eprintln!("gnome extension sync failed: {:#}", e);
+        }
+    }
+
     // Background: mouse gesture daemon.
     thread::spawn(|| {
         if let Err(e) = daemon::run() {

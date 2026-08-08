@@ -1,8 +1,8 @@
 [package]
 name = "arcglyph"
-version = "0.4.0"
+version = "0.6.0"
 edition = "2021"
-description = "Elegant right-click mouse-gesture daemon for Wayland (KDE Plasma)"
+description = "Elegant right-click mouse-gesture daemon for Wayland (KDE Plasma & GNOME)"
 license = "MIT"
 homepage = "https://github.com/lu5je0/arcglyph"
 repository = "https://github.com/lu5je0/arcglyph"
@@ -25,7 +25,7 @@ nix = { version = "0.29", features = ["poll", "inotify"] }
 smithay-client-toolkit = "0.19"
 tiny-skia = "0.11"
 iced = { version = "0.13", features = ["tokio"] }
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "sync"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "sync", "process"] }
 ksni = "0.3"
 dbus = "0.9"
 tempfile = "3"
@@ -39,9 +39,10 @@ strip = true
 maintainer = "lu5je0"
 copyright = "2026, lu5je0"
 extended-description = """\
-Arcglyph is a mouse-gesture daemon for Wayland (KDE Plasma). Hold the right \
-mouse button, draw a shape, release, and it forwards the mapped keyboard \
-shortcut to the focused app. Ships with a tray control and an inline GUI editor."""
+Arcglyph is a mouse-gesture daemon for Wayland (KDE Plasma & GNOME). Hold the \
+right mouse button, draw a shape, release, and it forwards the mapped keyboard \
+shortcut to the focused app. Ships with a tray control and an inline GUI editor. \
+On GNOME, install the bundled helper extension with --install-gnome-extension."""
 section = "utils"
 priority = "optional"
 depends = "$auto, libwayland-client0, libdbus-1-3, libfontconfig1"

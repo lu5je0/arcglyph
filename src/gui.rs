@@ -89,6 +89,9 @@ pub enum Msg {
     Save,
     Toast(String),
     ToastClear,
+    // permission banner
+    FixPerms,
+    FixPermsResult(Result<(), String>),
     // window picker
     PickApp,
     PickAppResult(Option<String>),
@@ -108,6 +111,8 @@ struct App {
     picking: bool,
     recording_keys: Option<usize>,
     perms_ok: bool,
+    fixing: bool,
+    fix_done: bool,
     autostart: bool,
 }
 
@@ -125,6 +130,8 @@ impl App {
                 picking: false,
                 recording_keys: None,
                 perms_ok: crate::perms::probe().ok(),
+                fixing: false,
+                fix_done: false,
                 autostart: crate::autostart::is_enabled(),
             },
             Task::none(),
@@ -443,6 +450,28 @@ impl App {
                 );
             }
             Msg::ToastClear => self.toast = None,
+            Msg::FixPerms => {
+                self.fixing = true;
+                return Task::perform(run_perm_fix(), |r| {
+                    Msg::FixPermsResult(r.map_err(|e| format!("{e:#}")))
+                });
+            }
+            Msg::FixPermsResult(result) => {
+                self.fixing = false;
+                return match result {
+                    Ok(()) => {
+                        // Group changes only apply to new login sessions, so
+                        // keep the banner up until the user logs back in.
+                        self.fix_done = true;
+                        Task::done(Msg::Toast(t(self.lang(), S::PermFixDone).into()))
+                    }
+                    Err(e) => Task::done(Msg::Toast(format!(
+                        "{}{}",
+                        t(self.lang(), S::PermFixFailedPrefix),
+                        e
+                    ))),
+                };
+            }
         }
         Task::none()
     }
@@ -548,7 +577,7 @@ impl App {
 
         let mut wrapper = column![].spacing(0);
         if !self.perms_ok {
-            wrapper = wrapper.push(perm_banner(lang));
+            wrapper = wrapper.push(perm_banner(lang, self.fixing, self.fix_done));
         }
         wrapper = wrapper.push(root);
         if let Some(toast_msg) = &self.toast {
@@ -998,19 +1027,44 @@ fn icon_button<'a>(label: &'a str, msg: Msg) -> Element<'a, Msg> {
         .into()
 }
 
-fn perm_banner<'a>(lang: Lang) -> Element<'a, Msg> {
-    let inner = column![
-        text(t(lang, S::PermTitle))
-            .size(14)
-            .color(Color::from_rgb(0.55, 0.35, 0.0)),
-        text(t(lang, S::PermBody))
-            .size(12)
-            .color(Color::from_rgb(0.4, 0.3, 0.1)),
-        text(t(lang, S::PermFixHint))
-            .size(12)
-            .color(Color::from_rgb(0.3, 0.25, 0.1)),
-    ]
-    .spacing(4);
+fn perm_banner<'a>(lang: Lang, fixing: bool, fix_done: bool) -> Element<'a, Msg> {
+    let mut inner = Column::new()
+        .spacing(4)
+        .push(
+            text(t(lang, S::PermTitle))
+                .size(14)
+                .color(Color::from_rgb(0.55, 0.35, 0.0)),
+        )
+        .push(
+            text(t(lang, S::PermBody))
+                .size(12)
+                .color(Color::from_rgb(0.4, 0.3, 0.1)),
+        );
+    if fix_done {
+        inner = inner.push(
+            text(t(lang, S::PermFixDone))
+                .size(12)
+                .color(Color::from_rgb(0.2, 0.45, 0.2)),
+        );
+    } else {
+        inner = inner.push(
+            text(t(lang, S::PermFixHint))
+                .size(12)
+                .color(Color::from_rgb(0.3, 0.25, 0.1)),
+        );
+        let mut fix_btn = button(text(if fixing {
+            t(lang, S::PermFixRunning)
+        } else {
+            t(lang, S::PermFixButton)
+        })
+        .size(12))
+        .padding([6, 14])
+        .style(secondary_button_style);
+        if !fixing {
+            fix_btn = fix_btn.on_press(Msg::FixPerms);
+        }
+        inner = inner.push(fix_btn);
+    }
 
     container(inner)
         .padding([10, 24])
@@ -1025,6 +1079,32 @@ fn perm_banner<'a>(lang: Lang) -> Element<'a, Msg> {
             ..Default::default()
         })
         .into()
+}
+
+async fn run_perm_fix() -> anyhow::Result<()> {
+    use anyhow::Context;
+    let user = String::from_utf8_lossy(
+        &std::process::Command::new("id")
+            .arg("-un")
+            .output()
+            .context("cannot determine current user")?
+            .stdout,
+    )
+    .trim()
+    .to_string();
+    if user.is_empty() {
+        anyhow::bail!("could not determine current username");
+    }
+    // pkexec asks for authorization through the desktop's polkit agent.
+    let out = tokio::process::Command::new("pkexec")
+        .args(["usermod", "-aG", "input", &user])
+        .output()
+        .await
+        .context("cannot start pkexec")?;
+    if !out.status.success() {
+        anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(())
 }
 
 fn toast(msg: &str) -> Element<'_, Msg> {

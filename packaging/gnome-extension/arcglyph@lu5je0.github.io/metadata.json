@@ -1,0 +1,7 @@
+{
+  "uuid": "arcglyph@lu5je0.github.io",
+  "name": "Arcglyph Helper",
+  "description": "Companion extension for the Arcglyph mouse-gesture daemon: exposes focused-window info over DBus and draws the gesture trail.",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "url": "https://github.com/lu5je0/arcglyph"
+}
