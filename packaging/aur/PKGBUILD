@@ -1,6 +1,6 @@
 # Maintainer: lu5je0 <lu5je0@gmail.com>
 pkgname=arcglyph
-pkgver=0.5.0
+pkgver=0.6.0
 pkgrel=1
 pkgdesc="Elegant right-click mouse-gesture daemon for Wayland (KDE Plasma & GNOME)"
 arch=('x86_64')
@@ -13,7 +13,7 @@ optdepends=('vulkan-icd-loader: GPU-accelerated overlay rendering'
             'gnome-shell: GNOME support via bundled helper extension (arcglyph --install-gnome-extension)')
 install="$pkgname.install"
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('1ecfbae9ce3d72d717a05f43a9f61f649b6bed7320e3f7e899070e67cfd47287')
+sha256sums=('f7febc64cc0927458cd2b462b5ac5ae2debc12d2ed60a5780af26bedce1c0432')
 
 prepare() {
   cd "$pkgname-$pkgver"
