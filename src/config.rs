@@ -11,6 +11,8 @@ pub struct Config {
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
+    pub hide_tray: bool,
+    #[serde(default)]
     pub lang: Lang,
     #[serde(default)]
     pub groups: Vec<GroupCfg>,
@@ -24,6 +26,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             enabled: true,
+            hide_tray: false,
             lang: Lang::default(),
             groups: Vec::new(),
         }
@@ -196,6 +199,7 @@ fn parse_config(text: &str) -> Result<Config> {
 
     Ok(Config {
         enabled: legacy.enabled,
+        hide_tray: false,
         lang: Lang::default(),
         groups,
     })
@@ -214,6 +218,9 @@ fn format_config(cfg: &Config) -> String {
     let mut out = String::new();
     out.push_str(HEADER);
     out.push_str(&format!("enabled: {}\n", cfg.enabled));
+    if cfg.hide_tray {
+        out.push_str("hide_tray: true\n");
+    }
     out.push_str(&format!(
         "lang: {}\n",
         match cfg.lang {
@@ -247,6 +254,7 @@ const HEADER: &str = "\
 # arcglyph gesture bindings
 #
 # enabled: global switch. false disables all gestures.
+# hide_tray: true hides the tray icon.
 # lang: GUI language. \"en\" (default) or \"zh\".
 # groups: each group associates a set of apps with a list of gestures.
 #   name: display name for the group
@@ -304,6 +312,7 @@ pub fn default_config() -> Config {
     ];
     Config {
         enabled: true,
+        hide_tray: false,
         lang: Lang::default(),
         groups: vec![GroupCfg {
             name: "Browser".to_string(),

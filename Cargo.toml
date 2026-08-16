@@ -1,6 +1,6 @@
 [package]
 name = "arcglyph"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 description = "Elegant right-click mouse-gesture daemon for Wayland (KDE Plasma & GNOME)"
 license = "MIT"

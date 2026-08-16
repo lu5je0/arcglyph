@@ -1,13 +1,22 @@
-use ksni::{menu::StandardItem, Icon, MenuItem, Tray};
+use crate::config::{self, Config};
+use crate::i18n::{t, Lang, S};
+use ksni::{
+    menu::{CheckmarkItem, StandardItem},
+    Icon, MenuItem, Tray, TrayMethods,
+};
 use std::sync::mpsc;
+use std::time::Duration;
 
 pub enum TrayCmd {
     ShowPreferences,
+    ToggleEnabled,
     Quit,
 }
 
 pub struct ArcglyphTray {
     pub tx: mpsc::Sender<TrayCmd>,
+    pub enabled: bool,
+    pub lang: Lang,
 }
 
 impl Tray for ArcglyphTray {
@@ -43,7 +52,7 @@ impl Tray for ArcglyphTray {
     fn menu(&self) -> Vec<MenuItem<Self>> {
         vec![
             StandardItem {
-                label: "Preferences…".into(),
+                label: t(self.lang, S::TrayPreferences).into(),
                 icon_name: "preferences-system".into(),
                 activate: Box::new(|t: &mut ArcglyphTray| {
                     let _ = t.tx.send(TrayCmd::ShowPreferences);
@@ -51,9 +60,26 @@ impl Tray for ArcglyphTray {
                 ..Default::default()
             }
             .into(),
+            CheckmarkItem {
+                label: t(
+                    self.lang,
+                    if self.enabled {
+                        S::TrayStatusOn
+                    } else {
+                        S::TrayStatusOff
+                    },
+                )
+                .into(),
+                checked: self.enabled,
+                activate: Box::new(|t: &mut ArcglyphTray| {
+                    let _ = t.tx.send(TrayCmd::ToggleEnabled);
+                }),
+                ..Default::default()
+            }
+            .into(),
             MenuItem::Separator,
             StandardItem {
-                label: "Quit".into(),
+                label: t(self.lang, S::TrayQuit).into(),
                 icon_name: "application-exit".into(),
                 activate: Box::new(|t: &mut ArcglyphTray| {
                     let _ = t.tx.send(TrayCmd::Quit);
@@ -62,5 +88,64 @@ impl Tray for ArcglyphTray {
             }
             .into(),
         ]
+    }
+}
+
+/// Tray lifecycle loop: spawns or shuts down the icon according to
+/// `hide_tray`, and keeps the menu state in sync with the config file.
+pub async fn run(tx: mpsc::Sender<TrayCmd>) {
+    let mut state = config::load_raw().unwrap_or_default();
+    let mut handle = if state.hide_tray {
+        None
+    } else {
+        spawn(&state, tx.clone()).await
+    };
+
+    // The GUI (or a manual edit) writes the config file; poll it so the
+    // tray icon visibility and menu state follow along.
+    let mut interval = tokio::time::interval(Duration::from_millis(500));
+    loop {
+        interval.tick().await;
+        let cfg = match config::load_raw() {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        if cfg.enabled == state.enabled
+            && cfg.hide_tray == state.hide_tray
+            && cfg.lang == state.lang
+        {
+            continue;
+        }
+        state = cfg;
+        if state.hide_tray {
+            if let Some(h) = handle.take() {
+                h.shutdown().await;
+            }
+        } else if let Some(h) = &handle {
+            let (enabled, lang) = (state.enabled, state.lang);
+            let _ = h
+                .update(|tray| {
+                    tray.enabled = enabled;
+                    tray.lang = lang;
+                })
+                .await;
+        } else {
+            handle = spawn(&state, tx.clone()).await;
+        }
+    }
+}
+
+async fn spawn(cfg: &Config, tx: mpsc::Sender<TrayCmd>) -> Option<ksni::Handle<ArcglyphTray>> {
+    let tray = ArcglyphTray {
+        tx,
+        enabled: cfg.enabled,
+        lang: cfg.lang,
+    };
+    match tray.spawn().await {
+        Ok(h) => Some(h),
+        Err(e) => {
+            eprintln!("tray spawn error: {:#}", e);
+            None
+        }
     }
 }

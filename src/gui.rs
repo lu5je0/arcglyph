@@ -71,6 +71,7 @@ pub enum Msg {
     ToggleGroup(bool),
     ToggleGlobal(bool),
     ToggleAutostart(bool),
+    ToggleHideTray(bool),
     SetLang(Lang),
     // gesture list
     AddGesture,
@@ -169,7 +170,21 @@ impl App {
 
     fn update(&mut self, msg: Msg) -> Task<Msg> {
         match msg {
-            Msg::Tray(ExternalMsg::Show) => return self.ensure_window(),
+            Msg::Tray(ExternalMsg::Show) => {
+                // Pick up changes made while the window was closed (e.g. the
+                // enabled toggle in the tray menu), unless there are unsaved
+                // edits that a reload would clobber.
+                if self.window.is_none() && !self.dirty {
+                    if let Ok(cfg) = config::load_raw() {
+                        self.cfg = cfg;
+                        if self.selected_group >= self.cfg.groups.len() {
+                            self.selected_group = self.cfg.groups.len().saturating_sub(1);
+                        }
+                        self.recording_keys = None;
+                    }
+                }
+                return self.ensure_window();
+            }
             Msg::Tray(ExternalMsg::Quit) => std::process::exit(0),
             Msg::WindowOpened(id) => {
                 self.window = Some(id);
@@ -265,6 +280,12 @@ impl App {
                     )))
                 }
             },
+            Msg::ToggleHideTray(v) => {
+                if self.cfg.hide_tray != v {
+                    self.cfg.hide_tray = v;
+                    self.dirty = true;
+                }
+            }
             Msg::SetLang(l) => {
                 if self.cfg.lang != l {
                     self.cfg.lang = l;
@@ -524,6 +545,8 @@ impl App {
                 })
                 .on_toggle(Msg::ToggleAutostart)
                 .size(20),
+            checkbox(t(lang, S::HideTray), self.cfg.hide_tray)
+                .on_toggle(Msg::ToggleHideTray),
             action_button(t(lang, S::Save), Msg::Save, self.dirty),
         ]
         .spacing(12)

@@ -73,6 +73,11 @@ pub enum S {
     PermFixFailedPrefix,
     AutostartOn,
     AutostartOff,
+    HideTray,
+    TrayPreferences,
+    TrayStatusOn,
+    TrayStatusOff,
+    TrayQuit,
 }
 
 pub fn t(lang: Lang, s: S) -> &'static str {
@@ -140,6 +145,11 @@ fn en(s: S) -> &'static str {
         S::PermFixFailedPrefix => "Fix failed: ",
         S::AutostartOn => "Autostart: On",
         S::AutostartOff => "Autostart: Off",
+        S::HideTray => "Hide tray icon",
+        S::TrayPreferences => "Preferences…",
+        S::TrayStatusOn => "Gestures: Enabled",
+        S::TrayStatusOff => "Gestures: Disabled",
+        S::TrayQuit => "Quit",
     }
 }
 
@@ -201,5 +211,10 @@ fn zh(s: S) -> &'static str {
         S::PermFixFailedPrefix => "修复失败：",
         S::AutostartOn => "开机自启：开",
         S::AutostartOff => "开机自启：关",
+        S::HideTray => "隐藏托盘图标",
+        S::TrayPreferences => "偏好设置…",
+        S::TrayStatusOn => "手势：已启用",
+        S::TrayStatusOff => "手势：已禁用",
+        S::TrayQuit => "退出",
     }
 }

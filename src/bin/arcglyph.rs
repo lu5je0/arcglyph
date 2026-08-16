@@ -1,11 +1,11 @@
 use std::thread;
 
 use arcglyph::{
+    config,
     daemon,
     gui::{self, ExternalMsg},
-    tray::{ArcglyphTray, TrayCmd},
+    tray::{self, TrayCmd},
 };
-use ksni::TrayMethods;
 
 fn main() {
     if std::env::args().any(|a| a == "--install-gnome-extension") {
@@ -42,7 +42,8 @@ fn main() {
 
     // Background: system tray. Owns its own tokio runtime, since ksni::spawn
     // is async and ksni 0.3 talks to the compositor's StatusNotifierWatcher
-    // over D-Bus.
+    // over D-Bus. The loop also watches the config file for hide_tray and
+    // enabled-state changes.
     let (tray_tx, tray_rx) = std::sync::mpsc::channel::<TrayCmd>();
     thread::spawn(move || {
         let rt = match tokio::runtime::Runtime::new() {
@@ -52,14 +53,7 @@ fn main() {
                 return;
             }
         };
-        rt.block_on(async move {
-            let tray = ArcglyphTray { tx: tray_tx };
-            if let Err(e) = tray.spawn().await {
-                eprintln!("tray spawn error: {:#}", e);
-                return;
-            }
-            std::future::pending::<()>().await;
-        });
+        rt.block_on(tray::run(tray_tx));
     });
 
     // Bridge tray commands into the iced runtime.
@@ -68,6 +62,7 @@ fn main() {
             match cmd {
                 TrayCmd::ShowPreferences => gui::send(ExternalMsg::Show),
                 TrayCmd::Quit => gui::send(ExternalMsg::Quit),
+                TrayCmd::ToggleEnabled => toggle_enabled(),
             }
         }
     });
@@ -92,5 +87,20 @@ fn main() {
     if let Err(e) = gui::run() {
         eprintln!("arcglyph gui error: {:#}", e);
         std::process::exit(1);
+    }
+}
+
+/// Flip the global enabled switch directly in the config file. The daemon
+/// picks it up via its inotify watch, and the tray loop refreshes the menu
+/// state on its next poll.
+fn toggle_enabled() {
+    match config::load_raw() {
+        Ok(mut cfg) => {
+            cfg.enabled = !cfg.enabled;
+            if let Err(e) = config::save(&cfg) {
+                eprintln!("failed to save enabled toggle: {:#}", e);
+            }
+        }
+        Err(e) => eprintln!("failed to load config: {:#}", e),
     }
 }

@@ -1,6 +1,6 @@
 pkgbase = arcglyph
 	pkgdesc = Elegant right-click mouse-gesture daemon for Wayland (KDE Plasma & GNOME)
-	pkgver = 0.6.0
+	pkgver = 0.7.0
 	pkgrel = 1
 	url = https://github.com/lu5je0/arcglyph
 	install = arcglyph.install
@@ -17,7 +17,7 @@ pkgbase = arcglyph
 	optdepends = vulkan-icd-loader: GPU-accelerated overlay rendering
 	optdepends = kwin: focused-window detection on KDE Plasma
 	optdepends = gnome-shell: GNOME support via bundled helper extension (arcglyph --install-gnome-extension)
-	source = arcglyph-0.6.0.tar.gz::https://github.com/lu5je0/arcglyph/archive/refs/tags/v0.6.0.tar.gz
-	sha256sums = f7febc64cc0927458cd2b462b5ac5ae2debc12d2ed60a5780af26bedce1c0432
+	source = arcglyph-0.7.0.tar.gz::https://github.com/lu5je0/arcglyph/archive/refs/tags/v0.7.0.tar.gz
+	sha256sums = 5edf1c2e14d1c7c692aa1e2b41cd13b1e6370e6c13b6fa89fd39c23e73cc989d
 
 pkgname = arcglyph
