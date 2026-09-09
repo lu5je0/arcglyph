@@ -1,8 +1,7 @@
 use crate::config::{self, Config, GestureCfg, GroupCfg};
 use crate::i18n::{t, Lang, S};
 use iced::{
-    alignment,
-    stream,
+    alignment, stream,
     widget::{
         button, checkbox, column, container, horizontal_rule, horizontal_space, row, scrollable,
         text, text_input, toggler, Column, Space,
@@ -40,7 +39,15 @@ pub fn run() -> iced::Result {
     let mut app = iced::daemon(App::title, App::update, App::view)
         .theme(App::theme)
         .subscription(App::subscription);
-    for path in FONT_CANDIDATES {
+    let font_paths = std::env::var_os("ARCGLYPH_FONT")
+        .map(std::path::PathBuf::from)
+        .into_iter()
+        .chain(
+            FONT_CANDIDATES
+                .iter()
+                .map(|path| std::path::PathBuf::from(*path)),
+        );
+    for path in font_paths {
         if let Ok(bytes) = std::fs::read(path) {
             app = app.font(bytes);
             break;
@@ -144,7 +151,7 @@ impl App {
     }
 
     fn title(&self, _: window::Id) -> String {
-        t(self.lang(), S::WindowTitle).to_string()
+        "ArcGlyph".to_string()
     }
 
     fn theme(&self, _: window::Id) -> Theme {
@@ -373,8 +380,10 @@ impl App {
             Msg::KeyRecordedEvent(key, mods) => {
                 if let Some(i) = self.recording_keys {
                     // Escape cancels recording without changing anything.
-                    if matches!(key, iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape))
-                    {
+                    if matches!(
+                        key,
+                        iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)
+                    ) {
                         self.recording_keys = None;
                         return Task::none();
                     }
@@ -430,9 +439,13 @@ impl App {
                 let pick_task = Task::perform(
                     async {
                         tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-                        crate::focus::query()
-                            .ok()
-                            .and_then(|(app, _, _)| if app.is_empty() { None } else { Some(app) })
+                        crate::focus::query().ok().and_then(|(app, _, _)| {
+                            if app.is_empty() {
+                                None
+                            } else {
+                                Some(app)
+                            }
+                        })
                     },
                     Msg::PickAppResult,
                 );
@@ -450,13 +463,11 @@ impl App {
                                 self.dirty = true;
                             }
                         }
-                        return restore
-                            .chain(focus)
-                            .chain(Task::done(Msg::Toast(format!(
-                                "{}{}",
-                                t(self.lang(), S::AddedPrefix),
-                                app
-                            ))));
+                        return restore.chain(focus).chain(Task::done(Msg::Toast(format!(
+                            "{}{}",
+                            t(self.lang(), S::AddedPrefix),
+                            app
+                        ))));
                     }
                     return restore.chain(focus).chain(Task::done(Msg::Toast(
                         t(self.lang(), S::NoAppDetected).into(),
@@ -502,8 +513,8 @@ impl App {
             return window::gain_focus(id);
         }
         let (id, task) = window::open(window::Settings {
-            size: Size::new(940.0, 640.0),
-            min_size: Some(Size::new(720.0, 480.0)),
+            size: Size::new(1120.0, 720.0),
+            min_size: Some(Size::new(820.0, 520.0)),
             ..Default::default()
         });
         self.window = Some(id);
@@ -520,7 +531,7 @@ impl App {
             Lang::En => "中文",
             Lang::Zh => "EN",
         };
-        let header = row![
+        let title_row = row![
             text(if let Some(grp) = self.current_group() {
                 format!("{} {}", grp.name, t(lang, S::GesturesFor))
             } else {
@@ -529,6 +540,10 @@ impl App {
             .size(24),
             horizontal_space(),
             action_button(lang_label, Msg::SetLang(next_lang), false),
+        ]
+        .spacing(12)
+        .align_y(alignment::Vertical::Center);
+        let controls_row = row![
             toggler(self.cfg.enabled)
                 .label(if self.cfg.enabled {
                     t(lang, S::MasterOn)
@@ -545,12 +560,13 @@ impl App {
                 })
                 .on_toggle(Msg::ToggleAutostart)
                 .size(20),
-            checkbox(t(lang, S::HideTray), self.cfg.hide_tray)
-                .on_toggle(Msg::ToggleHideTray),
+            checkbox(t(lang, S::HideTray), self.cfg.hide_tray).on_toggle(Msg::ToggleHideTray),
+            horizontal_space(),
             action_button(t(lang, S::Save), Msg::Save, self.dirty),
         ]
         .spacing(12)
         .align_y(alignment::Vertical::Center);
+        let header = column![title_row, controls_row].spacing(10);
 
         let subtitle = text(format!(
             "{} · {}",
@@ -755,7 +771,12 @@ impl App {
     }
 }
 
-fn sidebar_group_row<'a>(lang: Lang, i: usize, grp: &'a GroupCfg, selected: bool) -> Element<'a, Msg> {
+fn sidebar_group_row<'a>(
+    lang: Lang,
+    i: usize,
+    grp: &'a GroupCfg,
+    selected: bool,
+) -> Element<'a, Msg> {
     let subtitle = if grp.apps.is_empty() {
         t(lang, S::Global).to_string()
     } else {
@@ -882,7 +903,9 @@ fn gesture_card<'a>(lang: Lang, i: usize, g: &'a GestureCfg, recording: bool) ->
                     .unwrap_or_else(|| t(lang, S::Unnamed).into())
             )
             .size(15),
-            text(direction_words(lang, &g.pattern)).size(11).color(muted()),
+            text(direction_words(lang, &g.pattern))
+                .size(11)
+                .color(muted()),
         ]
         .spacing(2),
         horizontal_space(),
@@ -933,9 +956,7 @@ fn pattern_pad<'a>(i: usize) -> Element<'a, Msg> {
             .style(pad_button_style)
             .into()
     };
-    let blank = || -> Element<'a, Msg> {
-        container(text(" ")).width(Length::Fixed(44.0)).into()
-    };
+    let blank = || -> Element<'a, Msg> { container(text(" ")).width(Length::Fixed(44.0)).into() };
     let r1 = row![cell('7'), cell('8'), cell('9')].spacing(4);
     let r2 = row![cell('4'), blank(), cell('6')].spacing(4);
     let r3 = row![cell('1'), cell('2'), cell('3')].spacing(4);
@@ -1075,12 +1096,14 @@ fn perm_banner<'a>(lang: Lang, fixing: bool, fix_done: bool) -> Element<'a, Msg>
                 .size(12)
                 .color(Color::from_rgb(0.3, 0.25, 0.1)),
         );
-        let mut fix_btn = button(text(if fixing {
-            t(lang, S::PermFixRunning)
-        } else {
-            t(lang, S::PermFixButton)
-        })
-        .size(12))
+        let mut fix_btn = button(
+            text(if fixing {
+                t(lang, S::PermFixRunning)
+            } else {
+                t(lang, S::PermFixButton)
+            })
+            .size(12),
+        )
         .padding([6, 14])
         .style(secondary_button_style);
         if !fixing {
@@ -1255,9 +1278,7 @@ fn is_modifier_key(key: &iced::keyboard::Key) -> bool {
     use iced::keyboard::key::Named;
     matches!(
         key,
-        iced::keyboard::Key::Named(
-            Named::Control | Named::Shift | Named::Alt | Named::Super
-        )
+        iced::keyboard::Key::Named(Named::Control | Named::Shift | Named::Alt | Named::Super)
     )
 }
 
