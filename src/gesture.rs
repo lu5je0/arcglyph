@@ -10,6 +10,7 @@ const DIRECTIONS: [char; 8] = ['6', '3', '2', '1', '4', '7', '8', '9'];
 pub struct GesturePattern {
     exact: String,
     smoothed: String,
+    edge_noise: [bool; 2],
     cardinal: String,
 }
 
@@ -19,15 +20,22 @@ impl GesturePattern {
     }
 
     pub fn pick(&self, gestures: &[Gesture], app_id: Option<&str>) -> Option<Vec<Key>> {
-        pick(gestures, &self.exact, app_id)
-            .or_else(|| {
-                if self.smoothed != self.exact {
-                    pick(gestures, &self.smoothed, app_id)
-                } else {
-                    None
-                }
-            })
-            .or_else(|| pick(gestures, &self.cardinal, app_id))
+        let [leading_noise, trailing_noise] = self.edge_noise;
+        let smoothed = self.smoothed.as_str();
+        let candidates = [
+            Some(self.exact.as_str()),
+            (self.exact != self.smoothed).then_some(smoothed),
+            leading_noise.then(|| &smoothed[1..]),
+            trailing_noise.then(|| &smoothed[..smoothed.len() - 1]),
+            (leading_noise && trailing_noise && smoothed.len() >= 4)
+                .then(|| &smoothed[1..smoothed.len() - 1]),
+            Some(self.cardinal.as_str()),
+        ];
+
+        candidates
+            .into_iter()
+            .flatten()
+            .find_map(|candidate| pick(gestures, candidate, app_id))
     }
 }
 
@@ -104,16 +112,17 @@ impl GestureState {
 
     pub fn finish(&mut self) -> Option<GesturePattern> {
         self.active = false;
-        if self.runs.is_empty() || !self.moved_enough() {
+        // A complete stroke can return to its starting position.
+        if self.runs.is_empty() {
             return None;
         }
 
         let exact: String = self.runs.iter().map(|run| DIRECTIONS[run.sector]).collect();
-        let smoothed = self
+        let smoothed: Vec<_> = self
             .runs
             .iter()
             .enumerate()
-            .filter_map(|(i, run)| {
+            .filter(|&(i, run)| {
                 // A rounded 90° corner can briefly cross the sector between its legs.
                 if run.samples == 1 && i > 0 && i + 1 < self.runs.len() {
                     let before = self.runs[i - 1].sector;
@@ -122,12 +131,23 @@ impl GestureState {
                         && sector_distance(before, run.sector) == 1
                         && sector_distance(run.sector, after) == 1
                     {
-                        return None;
+                        return false;
                     }
                 }
-                Some(DIRECTIONS[run.sector])
+                true
             })
+            .map(|(_, run)| run)
             .collect();
+
+        let mut edge_noise = [false; 2];
+        if let [first, second, ..] = smoothed.as_slice() {
+            if smoothed.len() >= 3 {
+                let last = smoothed[smoothed.len() - 1];
+                let penultimate = smoothed[smoothed.len() - 2];
+                edge_noise = [is_short_axis(first, second), is_short_axis(last, penultimate)];
+            }
+        }
+        let smoothed = smoothed.iter().map(|run| DIRECTIONS[run.sector]).collect();
 
         let mut cardinal = std::mem::take(&mut self.cardinal);
         if self.runs.len() == 1 && cardinal.len() > 1 {
@@ -135,7 +155,12 @@ impl GestureState {
             cardinal.clear();
             cardinal.push(classify_cardinal(self.total_dx as f32, self.total_dy as f32));
         }
-        Some(GesturePattern { exact, smoothed, cardinal })
+        Some(GesturePattern {
+            exact,
+            smoothed,
+            edge_noise,
+            cardinal,
+        })
     }
 
     pub fn moved_enough(&self) -> bool {
@@ -190,6 +215,11 @@ fn classify_cardinal(dx: f32, dy: f32) -> char {
     } else {
         if dy >= 0.0 { '2' } else { '8' }
     }
+}
+
+fn is_short_axis(edge: &DirectionRun, neighbor: &DirectionRun) -> bool {
+    // A brief cardinal lead-in or tail can come from easing into a diagonal stroke.
+    edge.samples == 1 && edge.sector % 2 == 0 && sector_distance(edge.sector, neighbor.sector) == 1
 }
 
 fn sector_distance(a: usize, b: usize) -> usize {
@@ -279,6 +309,44 @@ mod tests {
             pattern.pick(&[binding("6", &[], Key::KEY_RIGHT)], None),
             Some(vec![Key::KEY_RIGHT])
         );
+    }
+
+    #[test]
+    fn matches_a_diagonal_reversal_even_when_it_returns_to_the_start() {
+        let pattern = draw(&[(-65, -65), (65, 65)]);
+        assert_eq!(
+            pattern.pick(&[binding("73", &[], Key::KEY_T)], None),
+            Some(vec![Key::KEY_T])
+        );
+        assert_eq!(pattern.recorded(), "73");
+    }
+
+    #[test]
+    fn tolerates_short_axis_motion_at_the_edges_of_a_diagonal_gesture() {
+        let pattern = draw(&[(0, -65), (65, -65), (65, 65), (0, 65)]);
+        assert_eq!(pattern.exact, "8932");
+        let two_diagonals = binding("93", &["chrome"], Key::KEY_T);
+        let with_lead_in = binding("893", &["chrome"], Key::KEY_W);
+        let exact = binding("8932", &["chrome"], Key::KEY_R);
+
+        assert_eq!(
+            pattern.pick(&[two_diagonals.clone(), with_lead_in.clone(), exact], Some("chrome")),
+            Some(vec![Key::KEY_R])
+        );
+        assert_eq!(
+            pattern.pick(&[two_diagonals.clone(), with_lead_in], Some("chrome")),
+            Some(vec![Key::KEY_W])
+        );
+        assert_eq!(
+            pattern.pick(&[two_diagonals], Some("chrome")),
+            Some(vec![Key::KEY_T])
+        );
+    }
+
+    #[test]
+    fn keeps_a_deliberate_axis_lead_in() {
+        let pattern = draw(&[(0, -65), (0, -65), (65, -65), (65, 65)]);
+        assert_eq!(pattern.pick(&[binding("93", &[], Key::KEY_T)], None), None);
     }
 
     #[test]
