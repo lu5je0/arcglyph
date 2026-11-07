@@ -70,7 +70,9 @@ so imprecise drawing is handled gracefully.
 
 ## Configuration
 
-`~/.config/arcglyph/arcglyph.yaml` (override with `ARCGLYPH_CONFIG=`).
+Set `ARCGLYPH_CONFIG` to override the config file path. Otherwise, Arcglyph
+uses `~/.dotfiles/arcglyph/arcglyph.yaml` when that directory exists, or
+`${XDG_CONFIG_HOME:-$HOME/.config}/arcglyph/arcglyph.yaml`.
 
 Gestures are organized into **groups**. Each group associates a set of
 apps with a list of gestures:

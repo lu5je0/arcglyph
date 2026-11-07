@@ -84,6 +84,12 @@ pub fn path() -> PathBuf {
     if let Ok(p) = std::env::var("ARCGLYPH_CONFIG") {
         return PathBuf::from(p);
     }
+    if let Some(home) = std::env::var_os("HOME") {
+        let dotfiles = PathBuf::from(home).join(".dotfiles").join("arcglyph");
+        if dotfiles.is_dir() {
+            return dotfiles.join("arcglyph.yaml");
+        }
+    }
     let base = std::env::var("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
