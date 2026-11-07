@@ -9,6 +9,7 @@ pub mod gnome;
 pub mod gui;
 pub mod i18n;
 pub mod injector;
+pub mod instance;
 pub mod keys;
 pub mod overlay;
 pub mod perms;

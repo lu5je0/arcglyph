@@ -66,8 +66,10 @@ Directions use the numpad convention:
 
 A pattern is the sequence of direction changes. For example, `26` is down
 then right, and `93` is up-right then down-right. Arcglyph looks for an
-eight-direction match first and falls back to four directions if no enabled
-gesture matches for the current app.
+eight-direction match first, then tries four directions. If those attempts
+find no enabled binding for the current app, nearby directions can match a
+configured gesture. For example, `82` can trigger `93` when there is no `82`
+binding. Equally close matches in the same scope must agree on the shortcut.
 
 ## Configuration
 
@@ -114,6 +116,7 @@ Config changes are detected automatically via inotify — no restart needed.
 
 Left-click the tray icon or pick **Preferences…** to open the editor.
 
+- Opening Arcglyph again shows the preferences window of the running instance
 - Sidebar lists gesture groups; select one to edit its gestures
 - Use **Copy group** to duplicate the selected group's apps and gestures
 - Use **Draw gesture** on a gesture card and drag with the left button to record its pattern

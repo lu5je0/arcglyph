@@ -4,6 +4,7 @@ use arcglyph::{
     config,
     daemon,
     gui::{self, ExternalMsg},
+    instance,
     tray::{self, TrayCmd},
 };
 
@@ -22,6 +23,16 @@ fn main() {
                 eprintln!("failed to install gnome extension: {:#}", e);
                 std::process::exit(1);
             }
+        }
+    }
+
+    let start_hidden = std::env::args().any(|arg| arg == "--hidden");
+    match instance::claim(!start_hidden, show_preferences) {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(err) => {
+            eprintln!("arcglyph instance error: {err:#}");
+            std::process::exit(1);
         }
     }
 
@@ -67,26 +78,23 @@ fn main() {
         }
     });
 
-    // Kick off an initial "show" so the window appears on first launch;
-    // afterwards the user goes through the tray. If the outbound channel
-    // isn't ready yet the message is dropped and we retry once the runtime
-    // is up. When launched with --hidden (e.g. via autostart at login),
-    // skip this so the app stays in the tray without showing the window.
-    let start_hidden = std::env::args().any(|a| a == "--hidden");
     if !start_hidden {
-        thread::spawn(|| {
-            for _ in 0..100 {
-                if gui::try_send(ExternalMsg::Show) {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-        });
+        thread::spawn(show_preferences);
     }
 
     if let Err(e) = gui::run() {
         eprintln!("arcglyph gui error: {:#}", e);
         std::process::exit(1);
+    }
+}
+
+fn show_preferences() {
+    // The first request can arrive before the GUI subscription is ready.
+    for _ in 0..100 {
+        if gui::try_send(ExternalMsg::Show) {
+            break;
+        }
+        thread::sleep(std::time::Duration::from_millis(50));
     }
 }
 

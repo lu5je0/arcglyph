@@ -560,7 +560,10 @@ impl App {
 
     fn ensure_window(&mut self) -> Task<Msg> {
         if let Some(id) = self.window {
-            return window::gain_focus(id);
+            return Task::batch([
+                window::gain_focus(id),
+                window::request_user_attention(id, Some(window::UserAttention::Informational)),
+            ]);
         }
         let (id, task) = window::open(window::Settings {
             size: Size::new(1120.0, 720.0),

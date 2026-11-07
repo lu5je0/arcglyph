@@ -36,6 +36,47 @@ impl GesturePattern {
             .into_iter()
             .flatten()
             .find_map(|candidate| pick(gestures, candidate, app_id))
+            .or_else(|| self.pick_nearby(gestures, app_id))
+    }
+
+    fn pick_nearby(&self, gestures: &[Gesture], app_id: Option<&str>) -> Option<Vec<Key>> {
+        let app_lower = app_id.map(str::to_ascii_lowercase);
+        let exact: Vec<_> = self.exact.chars().filter_map(sector_index).collect();
+        let smoothed: Vec<_> = self.smoothed.chars().filter_map(sector_index).collect();
+        let mut best: Option<(_, &[Key])> = None;
+        let mut ambiguous = false;
+
+        for gesture in gestures {
+            let global = gesture.apps.is_empty();
+            if !gesture.enabled || (!global && !matches_app(gesture, app_lower.as_deref())) {
+                continue;
+            }
+            let costs = [
+                nearby_cost(&exact, &gesture.pattern),
+                nearby_cost(&smoothed, &gesture.pattern),
+            ];
+            let Some(cost) = costs.into_iter().flatten().min() else {
+                continue;
+            };
+            let score = (cost, global);
+
+            match best {
+                Some((best_score, keys)) if score == best_score => {
+                    ambiguous |= keys != gesture.keys.as_slice();
+                }
+                Some((best_score, _)) if score > best_score => {}
+                _ => {
+                    best = Some((score, &gesture.keys));
+                    ambiguous = false;
+                }
+            }
+        }
+
+        if ambiguous {
+            None
+        } else {
+            best.map(|(_, keys)| keys.to_vec())
+        }
     }
 }
 
@@ -177,10 +218,8 @@ pub fn has_gestures_for_app(gestures: &[Gesture], app_id: Option<&str>) -> bool 
         if g.apps.is_empty() {
             return true;
         }
-        if let Some(ref app) = app_lower {
-            if g.apps.iter().any(|a| app.contains(&a.to_ascii_lowercase())) {
-                return true;
-            }
+        if matches_app(g, app_lower.as_deref()) {
+            return true;
         }
     }
     false
@@ -192,10 +231,8 @@ fn pick(gestures: &[Gesture], pattern: &str, app_id: Option<&str>) -> Option<Vec
         if !g.enabled || g.pattern != pattern || g.apps.is_empty() {
             continue;
         }
-        if let Some(ref app) = app_lower {
-            if g.apps.iter().any(|a| app.contains(&a.to_ascii_lowercase())) {
-                return Some(g.keys.clone());
-            }
+        if matches_app(g, app_lower.as_deref()) {
+            return Some(g.keys.clone());
         }
     }
     for g in gestures {
@@ -207,6 +244,56 @@ fn pick(gestures: &[Gesture], pattern: &str, app_id: Option<&str>) -> Option<Vec
         }
     }
     None
+}
+
+fn matches_app(gesture: &Gesture, app_lower: Option<&str>) -> bool {
+    app_lower.is_some_and(|app| {
+        gesture.apps.iter().any(|id| app.contains(&id.to_ascii_lowercase()))
+    })
+}
+
+fn sector_index(direction: char) -> Option<usize> {
+    DIRECTIONS.iter().position(|&candidate| candidate == direction)
+}
+
+fn nearby_cost(stroke: &[usize], pattern: &str) -> Option<usize> {
+    if pattern.is_empty()
+        || stroke.len() < pattern.len()
+        || stroke.len() > pattern.len().saturating_mul(3)
+    {
+        return None;
+    }
+
+    // Keep the least costly alignment for each possible end of the current leg.
+    let mut costs = vec![usize::MAX; stroke.len() + 1];
+    let mut next = costs.clone();
+    costs[0] = 0;
+
+    for direction in pattern.chars() {
+        let target = sector_index(direction)?;
+        // A diagonal leg can sweep through the axes on either side of it.
+        let max_parts = if target % 2 == 1 { 3 } else { 1 };
+        next.fill(usize::MAX);
+        for (start, &previous) in costs.iter().enumerate() {
+            if previous == usize::MAX {
+                continue;
+            }
+            let mut cost = previous;
+            for (offset, &observed) in stroke[start..].iter().take(max_parts).enumerate() {
+                let distance = sector_distance(observed, target);
+                if distance > 1 {
+                    break;
+                }
+                cost += distance + usize::from(offset > 0);
+                let end = start + offset + 1;
+                next[end] = next[end].min(cost);
+            }
+        }
+        std::mem::swap(&mut costs, &mut next);
+    }
+
+    let cost = costs[stroke.len()];
+    (cost != usize::MAX).then_some(cost)
 }
 
 fn classify_cardinal(dx: f32, dy: f32) -> char {
@@ -344,9 +431,49 @@ mod tests {
     }
 
     #[test]
-    fn keeps_a_deliberate_axis_lead_in() {
-        let pattern = draw(&[(0, -65), (0, -65), (65, -65), (65, 65)]);
-        assert_eq!(pattern.pick(&[binding("93", &[], Key::KEY_T)], None), None);
+    fn falls_back_to_neighboring_directions_when_the_exact_binding_is_unavailable() {
+        let vertical = draw(&[(0, -65), (0, 65)]);
+        let gestures = [
+            binding("82", &["nautilus"], Key::KEY_W),
+            binding("93", &[], Key::KEY_T),
+        ];
+        assert_eq!(
+            vertical.pick(&gestures, Some("nautilus")),
+            Some(vec![Key::KEY_W])
+        );
+        assert_eq!(
+            vertical.pick(&gestures, Some("chrome")),
+            Some(vec![Key::KEY_T])
+        );
+        assert_eq!(
+            draw(&[(65, 0), (-65, 0)]).pick(&[binding("91", &[], Key::KEY_T)], None),
+            Some(vec![Key::KEY_T])
+        );
+    }
+
+    #[test]
+    fn matches_diagonals_drawn_with_long_axis_transitions() {
+        let pattern = draw(&[
+            (0, -65), (0, -65), (65, -65), (65, 65), (0, 65), (0, 65),
+        ]);
+        let diagonal = binding("93", &[], Key::KEY_T);
+        let exact = binding("8932", &[], Key::KEY_W);
+        assert_eq!(pattern.exact, "8932");
+        assert_eq!(
+            pattern.pick(&[diagonal.clone(), exact], None),
+            Some(vec![Key::KEY_W])
+        );
+        assert_eq!(pattern.pick(&[diagonal], None), Some(vec![Key::KEY_T]));
+    }
+
+    #[test]
+    fn avoids_ambiguous_approximate_shortcuts() {
+        let pattern = draw(&[(0, -65), (0, 65)]);
+        let gestures = [
+            binding("93", &[], Key::KEY_T),
+            binding("71", &[], Key::KEY_W),
+        ];
+        assert_eq!(pattern.pick(&gestures, None), None);
     }
 
     #[test]
