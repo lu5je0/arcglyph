@@ -1,6 +1,6 @@
 [package]
 name = "arcglyph"
-version = "0.7.1"
+version = "0.7.2"
 edition = "2021"
 description = "Elegant right-click mouse-gesture daemon for Wayland (KDE Plasma & GNOME)"
 license = "MIT"
@@ -24,7 +24,7 @@ anyhow = "1"
 nix = { version = "0.29", features = ["poll", "inotify"] }
 smithay-client-toolkit = "0.19"
 tiny-skia = "0.11"
-iced = { version = "0.13", features = ["tokio"] }
+iced = { version = "0.14", features = ["tokio", "canvas"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "sync", "process"] }
 ksni = "0.3"
 dbus = "0.9"

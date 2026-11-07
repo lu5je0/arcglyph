@@ -72,8 +72,30 @@ pub fn run() -> Result<()> {
             if !revents.contains(nix::poll::PollFlags::POLLIN) {
                 continue;
             }
-            let events: Vec<InputEvent> = devs[i].fetch_events()?.collect();
-            for ev in events {
+            let mut motion = (0, 0);
+            for ev in devs[i].fetch_events()? {
+                // A single mouse report can deliver X and Y as separate events.
+                // Sample them together so a fast diagonal is not split into two axes.
+                if state.active && ev.event_type() == EventType::RELATIVE {
+                    if ev.code() == RelativeAxisType::REL_X.0 {
+                        motion.0 += ev.value();
+                    } else if ev.code() == RelativeAxisType::REL_Y.0 {
+                        motion.1 += ev.value();
+                    }
+                    mouse_out.emit(&[ev])?;
+                    continue;
+                }
+                let (dx, dy) = std::mem::take(&mut motion);
+                if dx != 0 || dy != 0 {
+                    state.feed(dx, dy);
+                    if !state.overlay_started && state.moved_enough() {
+                        state.overlay_started = true;
+                        overlay.send(OverlayCmd::Start);
+                    }
+                    if state.overlay_started {
+                        overlay.send(OverlayCmd::Move(dx, dy));
+                    }
+                }
                 handle_event(
                     ev,
                     &mut state,
@@ -169,10 +191,10 @@ fn handle_event(
                 if overlay_was_shown {
                     overlay.send(OverlayCmd::Finish);
                 }
-                eprintln!("pattern={:?} app={:?}", matched, app);
                 let picked = matched
-                    .as_deref()
-                    .and_then(|p| gesture::pick(gestures, p, app.as_deref()));
+                    .as_ref()
+                    .and_then(|pattern| pattern.pick(gestures, app.as_deref()));
+                eprintln!("pattern={matched:?} app={app:?}");
                 match picked {
                     Some(keys) => {
                         eprintln!("  -> injecting {} keys: {:?}", keys.len(), keys);
@@ -193,27 +215,6 @@ fn handle_event(
             } else {
                 mouse.emit(&[ev])?;
             }
-        }
-        EventType::RELATIVE if state.active => {
-            let code = ev.code();
-            let (mut dx, mut dy) = (0, 0);
-            if code == RelativeAxisType::REL_X.0 {
-                dx = ev.value();
-                state.feed(dx, 0);
-            } else if code == RelativeAxisType::REL_Y.0 {
-                dy = ev.value();
-                state.feed(0, dy);
-            }
-            if dx != 0 || dy != 0 {
-                if !state.overlay_started && state.moved_enough() {
-                    state.overlay_started = true;
-                    overlay.send(OverlayCmd::Start);
-                }
-                if state.overlay_started {
-                    overlay.send(OverlayCmd::Move(dx, dy));
-                }
-            }
-            mouse.emit(&[ev])?;
         }
         EventType::SYNCHRONIZATION => {
             mouse.emit(&[ev])?;

@@ -1,13 +1,14 @@
 use crate::config::{self, Config, GestureCfg, GroupCfg};
+use crate::gesture::GestureState;
 use crate::i18n::{t, Lang, S};
 use iced::{
-    alignment, stream,
+    alignment, mouse, stream,
     widget::{
-        button, checkbox, column, container, horizontal_rule, horizontal_space, row, scrollable,
-        text, text_input, toggler, Column, Space,
+        button, canvas, checkbox, column, container, row, rule, scrollable, space, text,
+        text_input, toggler, Column, Space,
     },
-    window, Background, Border, Color, Element, Length, Shadow, Size, Subscription, Task, Theme,
-    Vector,
+    window, Background, Border, Color, Element, Event, Length, Point, Rectangle, Renderer, Shadow,
+    Size, Subscription, Task, Theme, Vector,
 };
 use std::sync::{Mutex, OnceLock};
 
@@ -36,7 +37,8 @@ pub fn try_send(msg: ExternalMsg) -> bool {
 }
 
 pub fn run() -> iced::Result {
-    let mut app = iced::daemon(App::title, App::update, App::view)
+    let mut app = iced::daemon(App::new, App::update, App::view)
+        .title(App::title)
         .theme(App::theme)
         .subscription(App::subscription);
     let font_paths = std::env::var_os("ARCGLYPH_FONT")
@@ -54,7 +56,7 @@ pub fn run() -> iced::Result {
         }
     }
     app.default_font(iced::Font::with_name("Noto Sans CJK SC"))
-        .run_with(App::new)
+        .run()
 }
 
 const FONT_CANDIDATES: &[&str] = &[
@@ -69,6 +71,7 @@ pub enum Msg {
     // sidebar - group management
     SelectGroup(usize),
     AddGroup,
+    CopyGroup,
     RemoveGroup(usize),
     // group editing
     GroupNameChanged(String),
@@ -88,6 +91,9 @@ pub enum Msg {
     PatternAppend(usize, char),
     PatternBackspace(usize),
     PatternClear(usize),
+    DrawPattern(usize),
+    CancelDrawing,
+    PatternDrawn(usize, String),
     ToggleGesture(usize, bool),
     // keyboard shortcut recording
     StartRecordKeys(usize),
@@ -118,6 +124,7 @@ struct App {
     group_app_input: String,
     picking: bool,
     recording_keys: Option<usize>,
+    drawing_pattern: Option<usize>,
     perms_ok: bool,
     fixing: bool,
     fix_done: bool,
@@ -137,6 +144,7 @@ impl App {
                 group_app_input: String::new(),
                 picking: false,
                 recording_keys: None,
+                drawing_pattern: None,
                 perms_ok: crate::perms::probe().ok(),
                 fixing: false,
                 fix_done: false,
@@ -164,8 +172,12 @@ impl App {
             window::close_events().map(Msg::WindowClosed),
         ];
         if self.recording_keys.is_some() {
-            subs.push(iced::keyboard::on_key_press(|key, mods| {
-                Some(Msg::KeyRecordedEvent(key, mods))
+            subs.push(iced::event::listen_with(|event, status, _| match (event, status) {
+                (
+                    Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }),
+                    iced::event::Status::Ignored,
+                ) => Some(Msg::KeyRecordedEvent(key, modifiers)),
+                _ => None,
             }));
         }
         Subscription::batch(subs)
@@ -199,13 +211,16 @@ impl App {
             Msg::WindowClosed(id) => {
                 if self.window == Some(id) {
                     self.window = None;
+                    self.drawing_pattern = None;
                 }
             }
             Msg::SelectGroup(i) => {
                 self.selected_group = i;
                 self.group_app_input.clear();
+                self.drawing_pattern = None;
             }
             Msg::AddGroup => {
+                self.drawing_pattern = None;
                 let name = t(self.lang(), S::NewGroup).to_string();
                 self.cfg.groups.push(GroupCfg {
                     name,
@@ -216,7 +231,19 @@ impl App {
                 self.selected_group = self.cfg.groups.len() - 1;
                 self.dirty = true;
             }
+            Msg::CopyGroup => {
+                if let Some(mut group) = self.current_group().cloned() {
+                    group.name.push_str(t(self.lang(), S::GroupCopySuffix));
+                    self.selected_group += 1;
+                    self.cfg.groups.insert(self.selected_group, group);
+                    self.group_app_input.clear();
+                    self.recording_keys = None;
+                    self.drawing_pattern = None;
+                    self.dirty = true;
+                }
+            }
             Msg::RemoveGroup(i) => {
+                self.drawing_pattern = None;
                 if i < self.cfg.groups.len() {
                     self.cfg.groups.remove(i);
                     if self.selected_group >= self.cfg.groups.len() && self.selected_group > 0 {
@@ -312,6 +339,7 @@ impl App {
                 }
             }
             Msg::RemoveGesture(i) => {
+                self.drawing_pattern = None;
                 if let Some(grp) = self.cfg.groups.get_mut(self.selected_group) {
                     if i < grp.gestures.len() {
                         grp.gestures.remove(i);
@@ -361,6 +389,27 @@ impl App {
                     }
                 }
             }
+            Msg::DrawPattern(i) => {
+                self.recording_keys = None;
+                self.drawing_pattern = Some(i);
+            }
+            Msg::CancelDrawing => {
+                self.drawing_pattern = None;
+            }
+            Msg::PatternDrawn(i, pattern) => {
+                if self.drawing_pattern == Some(i) {
+                    self.drawing_pattern = None;
+                    if let Some(gesture) = self
+                        .cfg
+                        .groups
+                        .get_mut(self.selected_group)
+                        .and_then(|group| group.gestures.get_mut(i))
+                    {
+                        gesture.pattern = pattern;
+                        self.dirty = true;
+                    }
+                }
+            }
             Msg::ToggleGesture(i, v) => {
                 if let Some(grp) = self.cfg.groups.get_mut(self.selected_group) {
                     if let Some(g) = grp.gestures.get_mut(i) {
@@ -372,6 +421,7 @@ impl App {
                 }
             }
             Msg::StartRecordKeys(i) => {
+                self.drawing_pattern = None;
                 self.recording_keys = Some(i);
             }
             Msg::StopRecordKeys => {
@@ -538,7 +588,7 @@ impl App {
                 t(lang, S::NoGroup).to_string()
             })
             .size(24),
-            horizontal_space(),
+            space::horizontal(),
             action_button(lang_label, Msg::SetLang(next_lang), false),
         ]
         .spacing(12)
@@ -560,8 +610,10 @@ impl App {
                 })
                 .on_toggle(Msg::ToggleAutostart)
                 .size(20),
-            checkbox(t(lang, S::HideTray), self.cfg.hide_tray).on_toggle(Msg::ToggleHideTray),
-            horizontal_space(),
+            checkbox(self.cfg.hide_tray)
+                .label(t(lang, S::HideTray))
+                .on_toggle(Msg::ToggleHideTray),
+            space::horizontal(),
             action_button(t(lang, S::Save), Msg::Save, self.dirty),
         ]
         .spacing(12)
@@ -585,7 +637,13 @@ impl App {
             let mut list = Column::new().spacing(10);
             for i in 0..grp.gestures.len() {
                 let recording = self.recording_keys == Some(i);
-                list = list.push(gesture_card(lang, i, &grp.gestures[i], recording));
+                list = list.push(gesture_card(
+                    lang,
+                    i,
+                    &grp.gestures[i],
+                    recording,
+                    self.drawing_pattern == Some(i),
+                ));
             }
             list = list.push(add_card(lang));
             let body = scrollable(
@@ -594,12 +652,12 @@ impl App {
                     .width(Length::Fill),
             )
             .height(Length::Fill);
-            column![header, subtitle, horizontal_rule(1), body].spacing(12)
+            column![header, subtitle, rule::horizontal(1), body].spacing(12)
         } else {
             column![
                 header,
                 subtitle,
-                horizontal_rule(1),
+                rule::horizontal(1),
                 container(text(t(lang, S::SelectOrAddGroup)).size(14).color(muted()))
                     .padding(40)
                     .width(Length::Fill)
@@ -637,14 +695,18 @@ impl App {
         let lang = self.lang();
         let name_row = row![
             text(t(lang, S::GroupName)).size(11).color(muted()),
-            Space::with_width(8),
+            Space::new().width(8),
             text_input(t(lang, S::GroupName), &grp.name)
                 .on_input(Msg::GroupNameChanged)
                 .padding(8)
                 .style(input_style),
-            Space::with_width(12),
-            checkbox(t(lang, S::Enabled), grp.enabled).on_toggle(Msg::ToggleGroup),
+            Space::new().width(12),
+            checkbox(grp.enabled)
+                .label(t(lang, S::Enabled))
+                .on_toggle(Msg::ToggleGroup),
+            action_button(t(lang, S::CopyGroup), Msg::CopyGroup, false),
         ]
+        .spacing(8)
         .align_y(alignment::Vertical::Center);
 
         let count_text = if grp.apps.is_empty() {
@@ -654,7 +716,7 @@ impl App {
         };
         let apps_label = row![
             text(t(lang, S::AssociatedApps)).size(11).color(muted()),
-            horizontal_space(),
+            space::horizontal(),
             text(count_text).size(11).color(muted()),
         ]
         .align_y(alignment::Vertical::Center);
@@ -723,14 +785,14 @@ impl App {
         let mut col = Column::new()
             .spacing(2)
             .push(text(t(lang, S::Groups)).size(11).color(muted()))
-            .push(Space::with_height(4));
+            .push(Space::new().height(4));
 
         for (i, grp) in self.cfg.groups.iter().enumerate() {
             let selected = i == self.selected_group;
             col = col.push(sidebar_group_row(lang, i, grp, selected));
         }
 
-        col = col.push(Space::with_height(10));
+        col = col.push(Space::new().height(10));
         col = col.push(
             button(
                 row![text("+").size(14), text(t(lang, S::AddGroup)).size(12)]
@@ -854,7 +916,13 @@ fn group_app_chip<'a>(name: String) -> Element<'a, Msg> {
     .into()
 }
 
-fn gesture_card<'a>(lang: Lang, i: usize, g: &'a GestureCfg, recording: bool) -> Element<'a, Msg> {
+fn gesture_card<'a>(
+    lang: Lang,
+    i: usize,
+    g: &'a GestureCfg,
+    recording: bool,
+    drawing: bool,
+) -> Element<'a, Msg> {
     let keys_field = text_input("LEFTCTRL + W", &g.keys.join(" + "))
         .on_input(move |v| Msg::KeysChanged(i, v))
         .padding(8)
@@ -908,8 +976,8 @@ fn gesture_card<'a>(lang: Lang, i: usize, g: &'a GestureCfg, recording: bool) ->
                 .color(muted()),
         ]
         .spacing(2),
-        horizontal_space(),
-        checkbox("", g.enabled).on_toggle(move |v| Msg::ToggleGesture(i, v)),
+        space::horizontal(),
+        checkbox(g.enabled).on_toggle(move |v| Msg::ToggleGesture(i, v)),
         icon_button("×", Msg::RemoveGesture(i)),
     ]
     .spacing(10)
@@ -920,8 +988,12 @@ fn gesture_card<'a>(lang: Lang, i: usize, g: &'a GestureCfg, recording: bool) ->
         pad,
         column![
             text(t(lang, S::DragDirection)).size(11).color(muted()),
-            Space::with_height(4),
+            Space::new().height(4),
             row![
+                button(text(t(lang, S::DrawPattern)).size(11))
+                    .on_press(Msg::DrawPattern(i))
+                    .padding([4, 10])
+                    .style(secondary_button_style),
                 button(text(t(lang, S::Delete)).size(11))
                     .on_press(Msg::PatternBackspace(i))
                     .padding([4, 10])
@@ -938,13 +1010,135 @@ fn gesture_card<'a>(lang: Lang, i: usize, g: &'a GestureCfg, recording: bool) ->
     .spacing(16)
     .align_y(alignment::Vertical::Center);
 
-    let grid = column![pad_row, row![keys_input, label_input].spacing(12),].spacing(10);
+    let pattern_editor: Element<'_, Msg> = if drawing {
+        column![
+            row![
+                text(t(lang, S::DrawPatternHint)).size(12).color(muted()),
+                space::horizontal(),
+                action_button(t(lang, S::Cancel), Msg::CancelDrawing, false),
+            ]
+            .align_y(alignment::Vertical::Center),
+            container(
+                canvas::Canvas::new(GestureDrawing(i))
+                    .width(Length::Fill)
+                    .height(150),
+            )
+            .style(card_style)
+            .clip(true),
+        ]
+        .spacing(6)
+        .into()
+    } else {
+        pad_row.into()
+    };
+    let grid = column![pattern_editor, row![keys_input, label_input].spacing(12)].spacing(10);
 
-    container(column![title_row, horizontal_rule(1), grid].spacing(12))
+    container(column![title_row, rule::horizontal(1), grid].spacing(12))
         .padding(16)
         .style(card_style)
         .width(Length::Fill)
         .into()
+}
+
+struct GestureDrawing(usize);
+
+#[derive(Default)]
+struct DrawingState {
+    gesture: GestureState,
+    points: Vec<Point>,
+}
+
+impl canvas::Program<Msg> for GestureDrawing {
+    type State = DrawingState;
+
+    fn update(
+        &self,
+        state: &mut DrawingState,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> Option<canvas::Action<Msg>> {
+        let action = match event {
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                let point = cursor.position_in(bounds)?;
+                state.points.clear();
+                state.points.push(point);
+                state.gesture.start(None);
+                canvas::Action::request_redraw()
+            }
+            Event::Mouse(mouse::Event::CursorMoved { .. }) if state.gesture.active => {
+                let point = cursor.position_from(bounds.position())?;
+                let point = Point::new(
+                    point.x.clamp(0.0, bounds.width),
+                    point.y.clamp(0.0, bounds.height),
+                );
+                let prev = *state.points.last()?;
+                let dx = point.x.round() as i32 - prev.x.round() as i32;
+                let dy = point.y.round() as i32 - prev.y.round() as i32;
+                if dx == 0 && dy == 0 {
+                    return Some(canvas::Action::capture());
+                }
+                state.gesture.feed(dx, dy);
+                state.points.push(point);
+                canvas::Action::request_redraw()
+            }
+            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) if state.gesture.active => {
+                state.points.clear();
+                match state.gesture.finish() {
+                    Some(pattern) => {
+                        canvas::Action::publish(Msg::PatternDrawn(self.0, pattern.recorded()))
+                    }
+                    None => canvas::Action::request_redraw(),
+                }
+            }
+            Event::Window(window::Event::Unfocused) if state.gesture.active => {
+                state.gesture.active = false;
+                state.points.clear();
+                return Some(canvas::Action::request_redraw());
+            }
+            _ => return None,
+        };
+        Some(action.and_capture())
+    }
+
+    fn draw(
+        &self,
+        state: &DrawingState,
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let Some(&start) = state.points.first() else {
+            return Vec::new();
+        };
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        frame.fill(&canvas::Path::circle(start, 2.0), accent());
+        let path = canvas::Path::new(|path| {
+            path.move_to(start);
+            for &point in &state.points[1..] {
+                path.line_to(point);
+            }
+        });
+        frame.stroke(
+            &path,
+            canvas::Stroke::default().with_width(3.0).with_color(accent()),
+        );
+        vec![frame.into_geometry()]
+    }
+
+    fn mouse_interaction(
+        &self,
+        _state: &DrawingState,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> mouse::Interaction {
+        if cursor.is_over(bounds) {
+            mouse::Interaction::Crosshair
+        } else {
+            mouse::Interaction::default()
+        }
+    }
 }
 
 fn pattern_pad<'a>(i: usize) -> Element<'a, Msg> {
@@ -1259,7 +1453,7 @@ fn sidebar_button_style(status: button::Status, selected: bool) -> button::Style
 }
 
 fn tray_stream() -> impl iced::futures::Stream<Item = Msg> {
-    stream::channel(32, |mut output| async move {
+    stream::channel::<Msg>(32, async move |mut output| {
         use iced::futures::SinkExt;
         let (tx, mut rx) = tokio::sync::mpsc::channel::<ExternalMsg>(32);
         let slot = TRAY_CHANNEL.get_or_init(|| Mutex::new(None));
@@ -1400,4 +1594,64 @@ fn accent() -> Color {
 }
 fn accent_hover() -> Color {
     Color::from_rgb(0.0, 0.42, 0.9)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use canvas::Program;
+
+    #[test]
+    fn drawing_records_a_diagonal_pattern_on_release() {
+        let drawing = GestureDrawing(1);
+        let mut state = DrawingState::default();
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(240.0, 150.0));
+        let left_down = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+        let left_up = Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
+        let start = Point::new(30.0, 110.0);
+        drawing.update(&mut state, &left_down, bounds, mouse::Cursor::Available(start));
+
+        for position in [Point::new(90.0, 50.0), Point::new(150.0, 110.0)] {
+            let moved = Event::Mouse(mouse::Event::CursorMoved { position });
+            drawing.update(&mut state, &moved, bounds, mouse::Cursor::Available(position));
+        }
+
+        let (message, _, _) = drawing
+            .update(&mut state, &left_up, bounds, mouse::Cursor::Unavailable)
+            .unwrap()
+            .into_inner();
+        assert!(matches!(message, Some(Msg::PatternDrawn(1, pattern)) if pattern == "93"));
+        assert!(!state.gesture.active);
+    }
+
+    #[test]
+    fn copying_a_group_keeps_its_bindings_and_selects_the_copy() {
+        let (mut app, _) = App::new();
+        app.cfg = Config::default();
+        app.selected_group = 0;
+        app.cfg.groups.push(GroupCfg {
+            name: "Browser".into(),
+            apps: vec!["chrome".into()],
+            enabled: false,
+            gestures: vec![GestureCfg {
+                label: Some("New tab".into()),
+                pattern: "93".into(),
+                keys: vec!["LEFTCTRL".into(), "T".into()],
+                enabled: true,
+            }],
+        });
+
+        let _ = app.update(Msg::CopyGroup);
+
+        assert_eq!(app.selected_group, 1);
+        assert!(app.dirty);
+        assert_eq!(app.cfg.groups[0].name, "Browser");
+        let copy = app.current_group().unwrap();
+        assert_eq!(copy.name, "Browser (copy)");
+        assert_eq!(copy.apps, ["chrome"]);
+        assert!(!copy.enabled);
+        assert_eq!(copy.gestures[0].pattern, "93");
+        assert_eq!(copy.gestures[0].keys, ["LEFTCTRL", "T"]);
+    }
 }

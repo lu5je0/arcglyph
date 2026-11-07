@@ -56,17 +56,18 @@ extension, as GNOME does not support StatusNotifierItem out of the box.
 
 ## Gestures
 
-Directions use the numpad convention (4-way cardinal):
+Directions use the numpad convention:
 
 ```
-    8         ↑
-  4 . 6  =>  ← . →
-    2         ↓
+  7 8 9     ↖ ↑ ↗
+  4 . 6  =  ← . →
+  1 2 3     ↙ ↓ ↘
 ```
 
-A pattern is the sequence of direction changes. `26` = down then right
-(an L-shape). Each direction has a 90° sector giving ±45° tolerance,
-so imprecise drawing is handled gracefully.
+A pattern is the sequence of direction changes. For example, `26` is down
+then right, and `93` is up-right then down-right. Arcglyph looks for an
+eight-direction match first and falls back to four directions if no enabled
+gesture matches for the current app.
 
 ## Configuration
 
@@ -114,6 +115,8 @@ Config changes are detected automatically via inotify — no restart needed.
 Left-click the tray icon or pick **Preferences…** to open the editor.
 
 - Sidebar lists gesture groups; select one to edit its gestures
+- Use **Copy group** to duplicate the selected group's apps and gestures
+- Use **Draw gesture** on a gesture card and drag with the left button to record its pattern
 - Each group can associate multiple apps via chips or the **Pick window** button
 - **Pick window**: click the button, then click any window — its app_id is automatically added to the group
 - Set a shortcut by clicking **Record** and pressing the key combo directly
