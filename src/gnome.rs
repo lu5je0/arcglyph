@@ -1,6 +1,10 @@
 use anyhow::{Context, Result};
 use dbus::blocking::Connection;
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::PathBuf,
+    thread,
+    time::{Duration, Instant},
+};
 
 pub const BUS_NAME: &str = "io.github.lu5je0.Arcglyph.Helper";
 pub const OBJECT_PATH: &str = "/io/github/lu5je0/Arcglyph/Helper";
@@ -30,6 +34,19 @@ impl Helper {
             .method_call(IFACE, "GetFocus", ())
             .context("GetFocus")?;
         Ok((app_id, fullscreen, cursor_inside))
+    }
+
+    pub fn pick_app(&self) -> Result<Option<String>> {
+        let (initial_app, _, _) = self.get_focus()?;
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(120));
+            let (app, _, cursor_inside) = self.get_focus()?;
+            if cursor_inside && !app.is_empty() && app != initial_app {
+                return Ok(Some(app));
+            }
+        }
+        Ok(None)
     }
 
     pub fn trail_start(&self) -> Result<()> {

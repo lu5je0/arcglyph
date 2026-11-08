@@ -117,9 +117,10 @@ Config changes are detected automatically via inotify — no restart needed.
 Left-click the tray icon or pick **Preferences…** to open the editor.
 
 - Opening Arcglyph again shows the preferences window of the running instance
-- Sidebar lists gesture groups; select one to edit its gestures
-- Use **Copy group** to duplicate the selected group's apps and gestures
-- Use **Draw gesture** on a gesture card and drag with the left button to record its pattern
+- Choose a group in the sidebar and a gesture in the list to edit it in the details pane. The list shows whether each gesture is enabled or paused.
+- Use **+** next to **Groups** to add a group. Open **Manage** to rename a group or associate apps. Right-click a group to copy it.
+- Use **Draw gesture** in the details pane and drag with the left button to record its pattern.
+- **App settings** contains the global gesture switch, startup, tray, and language options.
 - Each group can associate multiple apps via chips or the **Pick window** button
 - **Pick window**: click the button, then click any window — its app_id is automatically added to the group
 - Set a shortcut by clicking **Record** and pressing the key combo directly

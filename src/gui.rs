@@ -1,14 +1,15 @@
 use crate::config::{self, Config, GestureCfg, GroupCfg};
+use crate::desktop::{self, Desktop};
 use crate::gesture::GestureState;
 use crate::i18n::{t, Lang, S};
 use iced::{
     alignment, mouse, stream,
     widget::{
-        button, canvas, checkbox, column, container, row, rule, scrollable, space, text,
-        text_input, toggler, Column, Space,
+        button, canvas, column, container, mouse_area, row, rule, scrollable, space, text,
+        text_input, toggler, tooltip, Column, Stack,
     },
     window, Background, Border, Color, Element, Event, Length, Point, Rectangle, Renderer, Shadow,
-    Size, Subscription, Task, Theme, Vector,
+    Size, Subscription, Task, Theme,
 };
 use std::sync::{Mutex, OnceLock};
 
@@ -69,9 +70,14 @@ const FONT_CANDIDATES: &[&str] = &[
 #[derive(Debug, Clone)]
 pub enum Msg {
     // sidebar - group management
+    ShowGroups,
+    ShowSettings,
     SelectGroup(usize),
+    ManageGroup,
     AddGroup,
-    CopyGroup,
+    OpenGroupMenu(usize),
+    DismissGroupMenu,
+    CopyGroup(usize),
     RemoveGroup(usize),
     // group editing
     GroupNameChanged(String),
@@ -84,6 +90,7 @@ pub enum Msg {
     ToggleHideTray(bool),
     SetLang(Lang),
     // gesture list
+    SelectGesture(usize),
     AddGesture,
     RemoveGesture(usize),
     KeysChanged(usize, String),
@@ -92,6 +99,7 @@ pub enum Msg {
     PatternBackspace(usize),
     PatternClear(usize),
     DrawPattern(usize),
+    EditDirections,
     CancelDrawing,
     PatternDrawn(usize, String),
     ToggleGesture(usize, bool),
@@ -108,11 +116,17 @@ pub enum Msg {
     FixPermsResult(Result<(), String>),
     // window picker
     PickApp,
-    PickAppResult(Option<String>),
+    PickAppResult(Result<Option<String>, String>),
     // external
     Tray(ExternalMsg),
     WindowOpened(window::Id),
     WindowClosed(window::Id),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Page {
+    Groups,
+    Settings,
 }
 
 struct App {
@@ -120,9 +134,14 @@ struct App {
     toast: Option<String>,
     dirty: bool,
     window: Option<window::Id>,
+    page: Page,
     selected_group: usize,
+    group_menu: Option<usize>,
+    selected_gesture: usize,
+    managing_group: bool,
+    editing_directions: bool,
     group_app_input: String,
-    picking: bool,
+    picking: Option<iced::task::Handle>,
     recording_keys: Option<usize>,
     drawing_pattern: Option<usize>,
     perms_ok: bool,
@@ -140,9 +159,14 @@ impl App {
                 toast: None,
                 dirty: false,
                 window: None,
+                page: Page::Groups,
                 selected_group: 0,
+                group_menu: None,
+                selected_gesture: 0,
+                managing_group: false,
+                editing_directions: false,
                 group_app_input: String::new(),
-                picking: false,
+                picking: None,
                 recording_keys: None,
                 drawing_pattern: None,
                 perms_ok: crate::perms::probe().ok(),
@@ -180,6 +204,20 @@ impl App {
                 _ => None,
             }));
         }
+        if self.group_menu.is_some() {
+            subs.push(iced::event::listen_with(|event, status, _| match event {
+                Event::Mouse(mouse::Event::ButtonPressed(_))
+                    if status == iced::event::Status::Ignored =>
+                {
+                    Some(Msg::DismissGroupMenu)
+                }
+                Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                    ..
+                }) => Some(Msg::DismissGroupMenu),
+                _ => None,
+            }));
+        }
         Subscription::batch(subs)
     }
 
@@ -187,7 +225,26 @@ impl App {
         self.cfg.groups.get(self.selected_group)
     }
 
+    fn select_gesture(&mut self, index: usize) {
+        self.selected_gesture = index;
+        self.drawing_pattern = None;
+        self.recording_keys = None;
+        self.editing_directions = false;
+    }
+
+    fn select_group(&mut self, index: usize) {
+        self.page = Page::Groups;
+        self.selected_group = index;
+        self.managing_group = false;
+        self.picking = None;
+        self.group_app_input.clear();
+        self.select_gesture(0);
+    }
+
     fn update(&mut self, msg: Msg) -> Task<Msg> {
+        if !matches!(msg, Msg::OpenGroupMenu(_) | Msg::ToastClear) {
+            self.group_menu = None;
+        }
         match msg {
             Msg::Tray(ExternalMsg::Show) => {
                 // Pick up changes made while the window was closed (e.g. the
@@ -199,7 +256,8 @@ impl App {
                         if self.selected_group >= self.cfg.groups.len() {
                             self.selected_group = self.cfg.groups.len().saturating_sub(1);
                         }
-                        self.recording_keys = None;
+                        let count = self.current_group().map_or(0, |group| group.gestures.len());
+                        self.select_gesture(self.selected_gesture.min(count.saturating_sub(1)));
                     }
                 }
                 return self.ensure_window();
@@ -211,16 +269,23 @@ impl App {
             Msg::WindowClosed(id) => {
                 if self.window == Some(id) {
                     self.window = None;
-                    self.drawing_pattern = None;
+                    self.picking = None;
+                    self.select_gesture(self.selected_gesture);
                 }
             }
-            Msg::SelectGroup(i) => {
-                self.selected_group = i;
-                self.group_app_input.clear();
-                self.drawing_pattern = None;
+            Msg::ShowGroups => self.page = Page::Groups,
+            Msg::ShowSettings => {
+                self.page = Page::Settings;
+                self.picking = None;
+                self.select_gesture(self.selected_gesture);
+            }
+            Msg::SelectGroup(i) => self.select_group(i),
+            Msg::ManageGroup => {
+                self.managing_group = !self.managing_group;
+                self.picking = None;
+                self.select_gesture(self.selected_gesture);
             }
             Msg::AddGroup => {
-                self.drawing_pattern = None;
                 let name = t(self.lang(), S::NewGroup).to_string();
                 self.cfg.groups.push(GroupCfg {
                     name,
@@ -228,27 +293,29 @@ impl App {
                     enabled: true,
                     gestures: Vec::new(),
                 });
-                self.selected_group = self.cfg.groups.len() - 1;
+                self.select_group(self.cfg.groups.len() - 1);
+                self.managing_group = true;
                 self.dirty = true;
             }
-            Msg::CopyGroup => {
-                if let Some(mut group) = self.current_group().cloned() {
+            Msg::OpenGroupMenu(index) => {
+                self.group_menu = (self.group_menu != Some(index)).then_some(index);
+            }
+            Msg::DismissGroupMenu => {}
+            Msg::CopyGroup(source) => {
+                if let Some(mut group) = self.cfg.groups.get(source).cloned() {
                     group.name.push_str(t(self.lang(), S::GroupCopySuffix));
-                    self.selected_group += 1;
-                    self.cfg.groups.insert(self.selected_group, group);
-                    self.group_app_input.clear();
-                    self.recording_keys = None;
-                    self.drawing_pattern = None;
+                    let index = source + 1;
+                    self.cfg.groups.insert(index, group);
+                    self.select_group(index);
+                    self.managing_group = true;
                     self.dirty = true;
                 }
             }
             Msg::RemoveGroup(i) => {
-                self.drawing_pattern = None;
                 if i < self.cfg.groups.len() {
                     self.cfg.groups.remove(i);
-                    if self.selected_group >= self.cfg.groups.len() && self.selected_group > 0 {
-                        self.selected_group -= 1;
-                    }
+                    let selected = self.selected_group - usize::from(i < self.selected_group);
+                    self.select_group(selected.min(self.cfg.groups.len().saturating_sub(1)));
                     self.dirty = true;
                 }
             }
@@ -326,6 +393,7 @@ impl App {
                     self.dirty = true;
                 }
             }
+            Msg::SelectGesture(i) => self.select_gesture(i),
             Msg::AddGesture => {
                 let label = t(self.lang(), S::NewGesture).to_string();
                 if let Some(grp) = self.cfg.groups.get_mut(self.selected_group) {
@@ -335,14 +403,18 @@ impl App {
                         label: Some(label),
                         enabled: true,
                     });
+                    let index = grp.gestures.len() - 1;
+                    self.select_gesture(index);
                     self.dirty = true;
                 }
             }
             Msg::RemoveGesture(i) => {
-                self.drawing_pattern = None;
                 if let Some(grp) = self.cfg.groups.get_mut(self.selected_group) {
                     if i < grp.gestures.len() {
                         grp.gestures.remove(i);
+                        let selected = self.selected_gesture - usize::from(i < self.selected_gesture);
+                        let selected = selected.min(grp.gestures.len().saturating_sub(1));
+                        self.select_gesture(selected);
                         self.dirty = true;
                     }
                 }
@@ -389,6 +461,7 @@ impl App {
                     }
                 }
             }
+            Msg::EditDirections => self.editing_directions = !self.editing_directions,
             Msg::DrawPattern(i) => {
                 self.recording_keys = None;
                 self.drawing_pattern = Some(i);
@@ -480,49 +553,67 @@ impl App {
                 }
             },
             Msg::PickApp => {
-                self.picking = true;
-                let minimize = if let Some(id) = self.window {
-                    window::minimize(id, true)
-                } else {
-                    Task::none()
-                };
-                let pick_task = Task::perform(
-                    async {
-                        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-                        crate::focus::query().ok().and_then(|(app, _, _)| {
-                            if app.is_empty() {
-                                None
+                if self.picking.is_some() {
+                    return Task::none();
+                }
+                let gnome = desktop::detect() == Desktop::Gnome;
+                let pick = Task::perform(
+                    async move {
+                        if !gnome {
+                            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                        }
+                        let app = tokio::task::spawn_blocking(move || {
+                            if gnome {
+                                crate::gnome::Helper::connect()?.pick_app()
                             } else {
-                                Some(app)
+                                crate::focus::query()
+                                    .map(|(app, _, _)| (!app.is_empty()).then_some(app))
                             }
                         })
+                        .await
+                        .map_err(|error| error.to_string())?
+                        .map_err(|error| format!("{error:#}"))?;
+                        Ok(app)
                     },
                     Msg::PickAppResult,
                 );
-                return minimize.chain(pick_task);
+                // Wayland cannot restore a minimized window through winit.
+                let start = match self.window {
+                    Some(id) if !gnome => window::minimize(id, true).chain(pick),
+                    _ => pick,
+                };
+                let (task, handle) = start.abortable();
+                self.picking = Some(handle.abort_on_drop());
+                return task;
             }
-            Msg::PickAppResult(app_id) => {
-                self.picking = false;
-                if let Some(id) = self.window {
-                    let restore = window::minimize(id, false);
-                    let focus = window::gain_focus(id);
-                    if let Some(app) = app_id {
-                        if let Some(grp) = self.cfg.groups.get_mut(self.selected_group) {
-                            if !grp.apps.iter().any(|a| a == &app) {
-                                grp.apps.push(app.clone());
+            Msg::PickAppResult(result) => {
+                if self.picking.take().is_none() {
+                    return Task::none();
+                }
+                let lang = self.lang();
+                let message = match result {
+                    Ok(Some(app)) => {
+                        if let Some(group) = self.cfg.groups.get_mut(self.selected_group) {
+                            if !group.apps.contains(&app) {
+                                group.apps.push(app.clone());
                                 self.dirty = true;
                             }
                         }
-                        return restore.chain(focus).chain(Task::done(Msg::Toast(format!(
-                            "{}{}",
-                            t(self.lang(), S::AddedPrefix),
-                            app
-                        ))));
+                        format!("{}{}", t(lang, S::AddedPrefix), app)
                     }
-                    return restore.chain(focus).chain(Task::done(Msg::Toast(
-                        t(self.lang(), S::NoAppDetected).into(),
-                    )));
-                }
+                    Ok(None) => t(lang, S::NoAppDetected).into(),
+                    Err(error) => {
+                        eprintln!("arcglyph window picker: {error}");
+                        t(lang, S::PickWindowFailed).into()
+                    }
+                };
+                let restore = match self.window {
+                    Some(id) if desktop::detect() != Desktop::Gnome => window::minimize(id, false),
+                    _ => Task::none(),
+                };
+                return restore
+                    .chain(self.ensure_window())
+                    .chain(Task::done(Msg::Toast(message)));
             }
             Msg::Toast(msg) => {
                 self.toast = Some(msg);
@@ -576,264 +667,329 @@ impl App {
 
     fn view(&self, _id: window::Id) -> Element<'_, Msg> {
         let lang = self.lang();
-        let next_lang = match lang {
-            Lang::En => Lang::Zh,
-            Lang::Zh => Lang::En,
+        let section = match self.page {
+            Page::Groups => S::GestureGroups,
+            Page::Settings => S::AppSettings,
         };
-        let lang_label = match lang {
-            Lang::En => "中文",
-            Lang::Zh => "EN",
+        let toolbar = row![
+            text(t(lang, section)).size(13).color(muted()),
+            space::horizontal(),
+            text(t(lang, if self.dirty { S::Unsaved } else { S::Synced }))
+                .size(12)
+                .color(muted()),
+            action_button(t(lang, S::Save), Msg::Save, true),
+        ]
+        .spacing(10)
+        .align_y(alignment::Vertical::Center);
+        let page = match self.page {
+            Page::Groups => self.group_page(),
+            Page::Settings => self.settings_page(),
         };
-        let title_row = row![
-            text(if let Some(grp) = self.current_group() {
-                format!("{} {}", grp.name, t(lang, S::GesturesFor))
-            } else {
-                t(lang, S::NoGroup).to_string()
-            })
-            .size(24),
-            space::horizontal(),
-            action_button(lang_label, Msg::SetLang(next_lang), false),
-        ]
-        .spacing(12)
-        .align_y(alignment::Vertical::Center);
-        let controls_row = row![
-            toggler(self.cfg.enabled)
-                .label(if self.cfg.enabled {
-                    t(lang, S::MasterOn)
-                } else {
-                    t(lang, S::MasterOff)
-                })
-                .on_toggle(Msg::ToggleGlobal)
-                .size(20),
-            toggler(self.autostart)
-                .label(if self.autostart {
-                    t(lang, S::AutostartOn)
-                } else {
-                    t(lang, S::AutostartOff)
-                })
-                .on_toggle(Msg::ToggleAutostart)
-                .size(20),
-            checkbox(self.cfg.hide_tray)
-                .label(t(lang, S::HideTray))
-                .on_toggle(Msg::ToggleHideTray),
-            space::horizontal(),
-            action_button(t(lang, S::Save), Msg::Save, self.dirty),
-        ]
-        .spacing(12)
-        .align_y(alignment::Vertical::Center);
-        let header = column![title_row, controls_row].spacing(10);
-
-        let subtitle = text(format!(
-            "{} · {}",
-            config::path().display(),
-            if self.dirty {
-                t(lang, S::Unsaved)
-            } else {
-                t(lang, S::Synced)
-            }
-        ))
-        .size(11)
-        .color(muted());
-
-        let content = if let Some(grp) = self.current_group() {
-            let group_header = self.group_header_view(grp);
-            let mut list = Column::new().spacing(10);
-            for i in 0..grp.gestures.len() {
-                let recording = self.recording_keys == Some(i);
-                list = list.push(gesture_card(
-                    lang,
-                    i,
-                    &grp.gestures[i],
-                    recording,
-                    self.drawing_pattern == Some(i),
-                ));
-            }
-            list = list.push(add_card(lang));
-            let body = scrollable(
-                container(column![group_header, list].spacing(16))
-                    .padding([4, 4])
-                    .width(Length::Fill),
-            )
+        let main = container(column![toolbar, page].spacing(16))
+            .padding([16, 20])
+            .width(Length::Fill)
             .height(Length::Fill);
-            column![header, subtitle, rule::horizontal(1), body].spacing(12)
-        } else {
-            column![
-                header,
-                subtitle,
-                rule::horizontal(1),
-                container(text(t(lang, S::SelectOrAddGroup)).size(14).color(muted()))
-                    .padding(40)
+        let mut body = column![].height(Length::Fill).spacing(6);
+        if !self.perms_ok {
+            body = body.push(perm_banner(lang, self.fixing, self.fix_done));
+        }
+        body = body.push(row![self.sidebar_view(), main].height(Length::Fill));
+        let content = container(body)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(|_| container::background(bg()));
+        let mut layers = Stack::new().push(content);
+        if let Some(message) = &self.toast {
+            layers = layers.push(
+                container(toast(message))
                     .width(Length::Fill)
-                    .align_x(alignment::Horizontal::Center),
-            ]
-            .spacing(12)
+                    .height(Length::Fill)
+                    .align_x(alignment::Horizontal::Center)
+                    .align_y(alignment::Vertical::Bottom)
+                    .padding(16),
+            );
+        }
+        layers.into()
+    }
+
+    fn group_page(&self) -> Element<'_, Msg> {
+        let lang = self.lang();
+        let Some(group) = self.current_group() else {
+            return container(text(t(lang, S::SelectOrAddGroup)).color(muted()))
+                .padding(24)
+                .into();
         };
 
-        let mut root = row![
-            self.sidebar_view(),
-            container(content).padding([20, 24]).width(Length::Fill),
+        let heading = row![
+            column![
+                text(&group.name).size(29),
+                text(t(lang, S::GroupScope)).size(12).color(muted()),
+            ]
+            .spacing(4)
+            .width(Length::Fill),
+            container(scope_toggle(
+                t(lang, S::EnableGroup),
+                t(lang, S::GroupOnly),
+                group.enabled,
+                Msg::ToggleGroup,
+            ))
+            .padding([8, 10])
+            .width(188)
+            .style(card_style),
         ]
-        .spacing(0);
+        .spacing(12)
+        .align_y(alignment::Vertical::Center);
+        let associated = if group.apps.is_empty() {
+            t(lang, S::AppliesAll).to_string()
+        } else {
+            group.apps.join("  ·  ")
+        };
+        let apps = row![
+            text(t(lang, S::AssociatedApps)).size(12).color(muted()),
+            container(text(associated).size(12).wrapping(iced::widget::text::Wrapping::None))
+                .width(Length::Fill)
+                .clip(true),
+            action_button(
+                t(lang, if self.managing_group { S::Done } else { S::ManageGroup }),
+                Msg::ManageGroup,
+                false,
+            ),
+        ]
+        .spacing(9)
+        .align_y(alignment::Vertical::Center);
 
-        let mut wrapper = column![].spacing(0);
-        if !self.perms_ok {
-            wrapper = wrapper.push(perm_banner(lang, self.fixing, self.fix_done));
-        }
-        wrapper = wrapper.push(root);
-        if let Some(toast_msg) = &self.toast {
-            wrapper = wrapper.push(container(toast(toast_msg)).padding([0, 24]));
-            root = row![];
-            let _ = root;
-        }
-
-        container(wrapper)
-            .style(|_theme| container::Style {
-                background: Some(Background::Color(bg())),
-                ..Default::default()
-            })
+        let editor = if self.managing_group {
+            preferences_scroll(self.group_editor(group)).into()
+        } else {
+            self.gesture_workspace(group)
+        };
+        column![heading, apps, rule::horizontal(1), editor]
+            .spacing(11)
+            .height(Length::Fill)
             .into()
     }
 
-    fn group_header_view<'a>(&'a self, grp: &'a GroupCfg) -> Element<'a, Msg> {
+    fn group_editor<'a>(&'a self, group: &'a GroupCfg) -> Element<'a, Msg> {
         let lang = self.lang();
-        let name_row = row![
-            text(t(lang, S::GroupName)).size(11).color(muted()),
-            Space::new().width(8),
-            text_input(t(lang, S::GroupName), &grp.name)
-                .on_input(Msg::GroupNameChanged)
-                .padding(8)
-                .style(input_style),
-            Space::new().width(12),
-            checkbox(grp.enabled)
-                .label(t(lang, S::Enabled))
-                .on_toggle(Msg::ToggleGroup),
-            action_button(t(lang, S::CopyGroup), Msg::CopyGroup, false),
+        let name = row![
+            labeled_input(
+                t(lang, S::GroupName),
+                group.name.clone(),
+                Msg::GroupNameChanged,
+                t(lang, S::GroupName),
+            ),
+            action_button(t(lang, S::CopyGroup), Msg::CopyGroup(self.selected_group), false),
         ]
         .spacing(8)
-        .align_y(alignment::Vertical::Center);
-
-        let count_text = if grp.apps.is_empty() {
-            t(lang, S::AppliesAll).to_string()
-        } else {
-            format!("{} {}", grp.apps.len(), t(lang, S::LinkedCount))
-        };
-        let apps_label = row![
-            text(t(lang, S::AssociatedApps)).size(11).color(muted()),
-            space::horizontal(),
-            text(count_text).size(11).color(muted()),
-        ]
-        .align_y(alignment::Vertical::Center);
-
-        let mut chips_col = Column::new().spacing(6);
-        let per_row = 4usize;
-        let mut buf: Vec<Element<'a, Msg>> = Vec::new();
-        for name in &grp.apps {
-            buf.push(group_app_chip(name.clone()));
-            if buf.len() == per_row {
-                let mut r = iced::widget::Row::new().spacing(6);
-                for c in buf.drain(..) {
-                    r = r.push(c);
-                }
-                chips_col = chips_col.push(r);
-            }
+        .align_y(alignment::Vertical::Bottom);
+        let mut chips = iced::widget::Row::new().spacing(6);
+        for app in &group.apps {
+            chips = chips.push(group_app_chip(app.clone()));
         }
-        if !buf.is_empty() {
-            let mut r = iced::widget::Row::new().spacing(6);
-            for c in buf.drain(..) {
-                r = r.push(c);
-            }
-            chips_col = chips_col.push(r);
-        }
-
-        let add_row = row![
+        let add = row![
             text_input(t(lang, S::AppIdPlaceholder), &self.group_app_input)
                 .on_input(Msg::GroupAppInput)
                 .on_submit(Msg::GroupAttachApp)
-                .padding(6)
-                .size(12)
+                .padding(8)
                 .style(input_style),
-            button(text(t(lang, S::Add)).size(12))
-                .on_press(Msg::GroupAttachApp)
-                .padding([6, 12])
-                .style(secondary_button_style),
-            button(
-                text(if self.picking {
-                    t(lang, S::ClickTargetWindow)
-                } else {
-                    t(lang, S::PickWindow)
-                })
-                .size(12)
-            )
-            .on_press(Msg::PickApp)
-            .padding([6, 12])
+            action_button(t(lang, S::Add), Msg::GroupAttachApp, false),
+            button(text(t(lang, if self.picking.is_some() {
+                S::ClickTargetWindow
+            } else {
+                S::PickWindow
+            })).size(12))
+            .on_press_maybe(self.picking.is_none().then_some(Msg::PickApp))
+            .padding([6, 10])
             .style(secondary_button_style),
         ]
-        .spacing(6);
-
-        let mut inner = Column::new().spacing(8).push(name_row).push(apps_label);
-        if !grp.apps.is_empty() {
-            inner = inner.push(chips_col);
-        }
-        inner = inner.push(add_row);
-
-        container(inner)
-            .padding(16)
-            .style(card_style)
+        .spacing(7)
+        .align_y(alignment::Vertical::Center);
+        container(column![name, text(t(lang, S::AssociatedApps)).size(12), chips.wrap(), add].spacing(10))
+            .padding(14)
             .width(Length::Fill)
+            .style(card_style)
             .into()
+    }
+
+    fn gesture_workspace<'a>(&'a self, group: &'a GroupCfg) -> Element<'a, Msg> {
+        let lang = self.lang();
+        let mut list = Column::new().spacing(2);
+        for (index, gesture) in group.gestures.iter().enumerate() {
+            list = list.push(gesture_row(lang, index, gesture, self.selected_gesture == index));
+        }
+        let toolbar = row![
+            text(format!("{}  {}", t(lang, S::Gestures), group.gestures.len())).size(15),
+            space::horizontal(),
+            action_button(t(lang, S::AddGesture), Msg::AddGesture, false),
+        ]
+        .spacing(6)
+        .align_y(alignment::Vertical::Center);
+        let list = column![toolbar, preferences_scroll(list)]
+            .spacing(7)
+            .width(Length::Fill)
+            .height(Length::Fill);
+
+        if let Some(gesture) = group.gestures.get(self.selected_gesture) {
+            let index = self.selected_gesture;
+            let inspector = gesture_inspector(
+                lang,
+                index,
+                gesture,
+                self.recording_keys == Some(index),
+                self.drawing_pattern == Some(index),
+                self.editing_directions,
+            );
+            row![
+                list,
+                preferences_scroll(inspector).width(290),
+            ]
+            .spacing(14)
+            .height(Length::Fill)
+            .into()
+        } else {
+            list.into()
+        }
+    }
+
+    fn settings_page(&self) -> Element<'_, Msg> {
+        let lang = self.lang();
+        let (language, next_language) = match lang {
+            Lang::En => ("简体中文", Lang::Zh),
+            Lang::Zh => ("English", Lang::En),
+        };
+        let recognition = column![
+            text(t(lang, S::GestureRecognition)).size(15),
+            rule::horizontal(1),
+            scope_toggle(
+                t(lang, S::GlobalSwitch),
+                t(lang, S::GlobalScope),
+                self.cfg.enabled,
+                Msg::ToggleGlobal,
+            ),
+        ]
+        .spacing(9);
+        let startup = column![
+            text(t(lang, S::StartupAndTray)).size(15),
+            rule::horizontal(1),
+            scope_toggle(
+                t(lang, S::LaunchAtLogin),
+                t(lang, S::LoginScope),
+                self.autostart,
+                Msg::ToggleAutostart,
+            ),
+            rule::horizontal(1),
+            scope_toggle(
+                t(lang, S::ShowTray),
+                t(lang, S::TrayScope),
+                !self.cfg.hide_tray,
+                |visible| Msg::ToggleHideTray(!visible),
+            ),
+        ]
+        .spacing(9);
+        let interface = column![
+            text(t(lang, S::InterfaceAndConfig)).size(15),
+            rule::horizontal(1),
+            row![
+                text(t(lang, S::Language)).size(13),
+                space::horizontal(),
+                action_button(language, Msg::SetLang(next_language), false),
+            ]
+            .align_y(alignment::Vertical::Center),
+            text(t(lang, S::ConfigFile)).size(13),
+            text(config::path().display().to_string()).size(12).color(muted()),
+        ]
+        .spacing(8);
+        preferences_scroll(
+            column![
+                text(t(lang, S::AppSettings)).size(29),
+                recognition,
+                startup,
+                interface,
+            ]
+            .spacing(22)
+            .padding([0, 10])
+            .width(Length::Fill),
+        )
+        .into()
     }
 
     fn sidebar_view(&self) -> Element<'_, Msg> {
         let lang = self.lang();
-        let mut col = Column::new()
-            .spacing(2)
-            .push(text(t(lang, S::Groups)).size(11).color(muted()))
-            .push(Space::new().height(4));
-
-        for (i, grp) in self.cfg.groups.iter().enumerate() {
-            let selected = i == self.selected_group;
-            col = col.push(sidebar_group_row(lang, i, grp, selected));
+        let mut groups = Column::new().spacing(4);
+        for (index, group) in self.cfg.groups.iter().enumerate() {
+            groups = groups.push(sidebar_group_row(
+                lang,
+                index,
+                group,
+                self.page == Page::Groups && index == self.selected_group,
+                self.group_menu == Some(index),
+            ));
         }
 
-        col = col.push(Space::new().height(10));
-        col = col.push(
-            button(
-                row![text("+").size(14), text(t(lang, S::AddGroup)).size(12)]
-                    .spacing(6)
-                    .align_y(alignment::Vertical::Center),
-            )
-            .on_press(Msg::AddGroup)
-            .padding([8, 12])
-            .width(Length::Fill)
-            .style(|_theme, status| button::Style {
-                background: Some(Background::Color(match status {
-                    button::Status::Hovered => hover_color(),
-                    _ => Color::TRANSPARENT,
-                })),
-                text_color: accent(),
-                border: Border {
-                    radius: 8.0.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            }),
+        let add = tooltip(
+            action_button("＋", Msg::AddGroup, false),
+            container(text(t(lang, S::AddGroup)).size(12))
+                .padding(6)
+                .style(card_style),
+            tooltip::Position::Right,
         );
-
-        container(col)
-            .padding(18)
-            .width(Length::Fixed(220.0))
+        let group_title = row![
+            text(t(lang, S::Groups)).size(12).color(muted()),
+            space::horizontal(),
+            add,
+        ]
+        .align_y(alignment::Vertical::Center);
+        let global_status = button(
+            row![
+                text("●").size(11).color(if self.cfg.enabled { accent() } else { muted() }),
+                column![
+                    text(t(lang, S::GlobalGestures)).size(13),
+                    text(t(lang, if self.cfg.enabled { S::Running } else { S::Paused }))
+                        .size(11)
+                        .color(muted()),
+                ],
+                space::horizontal(),
+                text("›").size(16).color(muted()),
+            ]
+            .spacing(7)
+            .align_y(alignment::Vertical::Center),
+        )
+        .on_press(Msg::ShowSettings)
+        .width(Length::Fill)
+        .padding(8)
+        .style(secondary_button_style);
+        let sidebar = column![
+            row![
+                container(text("↗").size(14).color(Color::WHITE))
+                    .padding([2, 6])
+                    .style(|_| container::background(accent()).border(iced::border::rounded(6))),
+                text("ArcGlyph").size(17),
+            ]
+            .spacing(7)
+            .align_y(alignment::Vertical::Center),
+            navigation_button(t(lang, S::GestureGroups), Msg::ShowGroups, self.page == Page::Groups),
+            navigation_button(t(lang, S::AppSettings), Msg::ShowSettings, self.page == Page::Settings),
+            rule::horizontal(1),
+            group_title,
+            preferences_scroll(groups),
+            global_status,
+        ]
+        .spacing(9);
+        container(sidebar)
+            .padding(12)
+            .width(166)
             .height(Length::Fill)
-            .style(|_theme| container::Style {
-                background: Some(Background::Color(sidebar_color())),
-                border: Border {
-                    width: 1.0,
-                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.05),
-                    radius: 0.0.into(),
-                },
-                ..Default::default()
-            })
+            .style(|_| container::background(sidebar_color()))
             .into()
     }
+}
+
+fn preferences_scroll<'a>(content: impl Into<Element<'a, Msg>>) -> scrollable::Scrollable<'a, Msg> {
+    scrollable(content)
+        .direction(scrollable::Direction::Vertical(
+            scrollable::Scrollbar::new().width(5).scroller_width(5).spacing(4),
+        ))
+        .height(Length::Fill)
 }
 
 fn sidebar_group_row<'a>(
@@ -841,22 +997,23 @@ fn sidebar_group_row<'a>(
     i: usize,
     grp: &'a GroupCfg,
     selected: bool,
+    menu_open: bool,
 ) -> Element<'a, Msg> {
     let subtitle = if grp.apps.is_empty() {
         t(lang, S::Global).to_string()
     } else {
-        grp.apps.join(", ")
+        format!("{} {}", grp.apps.len(), t(lang, S::LinkedCount))
     };
     let label_col = column![
-        text(&grp.name).size(13),
-        text(subtitle).size(10).color(muted()),
+        text(&grp.name).size(13).wrapping(iced::widget::text::Wrapping::None),
+        text(subtitle).size(11).color(muted()),
     ]
     .spacing(1);
 
     let row_inner = row![
-        button(label_col)
+        button(container(label_col).clip(true))
             .on_press(Msg::SelectGroup(i))
-            .padding([8, 12])
+            .padding([8, 6])
             .width(Length::Fill)
             .style(move |_theme, status| sidebar_button_style(status, selected)),
         button(text("×").size(14).color(muted()))
@@ -877,7 +1034,23 @@ fn sidebar_group_row<'a>(
     ]
     .spacing(2)
     .align_y(alignment::Vertical::Center);
-    row_inner.into()
+    let group_row = mouse_area(row_inner).on_right_press(Msg::OpenGroupMenu(i));
+    let mut layers = Stack::new().push(group_row);
+    if menu_open {
+        layers = layers.push(
+            container(
+                button(text(t(lang, S::CopyGroup)).size(12))
+                    .on_press(Msg::CopyGroup(i))
+                    .padding([6, 10])
+                    .style(secondary_button_style),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(alignment::Horizontal::Right)
+            .align_y(alignment::Vertical::Center),
+        );
+    }
+    layers.into()
 }
 
 fn group_app_chip<'a>(name: String) -> Element<'a, Msg> {
@@ -907,140 +1080,275 @@ fn group_app_chip<'a>(name: String) -> Element<'a, Msg> {
     )
     .padding([4, 8])
     .style(|_theme| container::Style {
-        background: Some(Background::Color(Color::from_rgba(0.0, 0.48, 1.0, 0.10))),
+        background: Some(Background::Color(hover_color())),
         border: Border {
             radius: 999.0.into(),
             width: 1.0,
-            color: Color::from_rgba(0.0, 0.48, 1.0, 0.25),
+            color: line(),
         },
-        text_color: Some(Color::from_rgb(0.05, 0.35, 0.75)),
+        text_color: Some(accent()),
         ..Default::default()
     })
     .into()
 }
 
-fn gesture_card<'a>(
+fn scope_toggle<'a>(
+    title: &'a str,
+    scope: &'a str,
+    enabled: bool,
+    on_toggle: impl Fn(bool) -> Msg + 'a,
+) -> Element<'a, Msg> {
+    row![
+        column![text(title).size(13), text(scope).size(11).color(muted())].spacing(2),
+        space::horizontal(),
+        toggler(enabled).on_toggle(on_toggle).size(16).style(switch_style),
+    ]
+    .spacing(9)
+    .align_y(alignment::Vertical::Center)
+    .into()
+}
+
+fn navigation_button(label: &str, action: Msg, active: bool) -> Element<'_, Msg> {
+    button(text(label).size(13))
+        .on_press(action)
+        .padding([8, 10])
+        .width(Length::Fill)
+        .style(move |_, status| sidebar_button_style(status, active))
+        .into()
+}
+
+fn gesture_row(lang: Lang, index: usize, gesture: &GestureCfg, selected: bool) -> Element<'_, Msg> {
+    let arrows: String = gesture.pattern.chars().map(pattern_arrow).collect();
+    let shortcut = gesture
+        .keys
+        .iter()
+        .map(|key| match key.as_str() {
+            "LEFTCTRL" | "RIGHTCTRL" => "Ctrl",
+            "LEFTSHIFT" | "RIGHTSHIFT" => "Shift",
+            "LEFTALT" | "RIGHTALT" => "Alt",
+            "LEFTMETA" | "RIGHTMETA" => "Super",
+            "LEFT" => "←",
+            "RIGHT" => "→",
+            "UP" => "↑",
+            "DOWN" => "↓",
+            "HOME" => "Home",
+            "END" => "End",
+            key => key,
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let state = if gesture.enabled { S::Enabled } else { S::Paused };
+    button(
+        row![
+            container(text(arrows).size(17).color(accent()).wrapping(iced::widget::text::Wrapping::None))
+                .width(44)
+                .clip(true),
+            container(
+                text(gesture.label.as_deref().unwrap_or(t(lang, S::Unnamed)))
+                    .size(13)
+                    .wrapping(iced::widget::text::Wrapping::None),
+            )
+            .width(Length::Fill)
+            .clip(true),
+            container(text(shortcut).size(11).wrapping(iced::widget::text::Wrapping::None))
+                .max_width(102)
+                .padding([2, 5])
+                .style(card_style)
+                .clip(true),
+            text(t(lang, state)).size(11).color(if gesture.enabled { accent() } else { muted() }),
+        ]
+        .spacing(7)
+        .align_y(alignment::Vertical::Center),
+    )
+    .on_press(Msg::SelectGesture(index))
+    .width(Length::Fill)
+    .padding([8, 7])
+    .style(move |_, status| {
+        let mut style = sidebar_button_style(status, selected);
+        if !selected {
+            style.border.color = line();
+            style.border.width = 1.0;
+        }
+        style
+    })
+    .into()
+}
+
+fn gesture_inspector(
     lang: Lang,
-    i: usize,
-    g: &'a GestureCfg,
+    index: usize,
+    gesture: &GestureCfg,
     recording: bool,
     drawing: bool,
-) -> Element<'a, Msg> {
-    let keys_field = text_input("LEFTCTRL + W", &g.keys.join(" + "))
-        .on_input(move |v| Msg::KeysChanged(i, v))
-        .padding(8)
-        .style(input_style);
-    let record_btn = button(
-        text(if recording {
-            t(lang, S::PressKeys)
-        } else {
-            t(lang, S::Record)
-        })
-        .size(12),
-    )
-    .on_press(if recording {
-        Msg::StopRecordKeys
-    } else {
-        Msg::StartRecordKeys(i)
-    })
-    .padding([8, 12])
-    .style(secondary_button_style);
-    let keys_input: Element<'a, Msg> = column![
-        text(t(lang, S::Shortcut)).size(11).color(muted()),
-        row![keys_field, record_btn].spacing(6),
-    ]
-    .spacing(4)
-    .width(Length::Fill)
-    .into();
-    let label_input = labeled_input(
-        t(lang, S::Description),
-        g.label.clone().unwrap_or_default(),
-        move |v| Msg::LabelChanged(i, v),
-        t(lang, S::OptionalDescription),
-    );
-
-    let pattern_preview = if g.pattern.is_empty() {
-        t(lang, S::Unset).to_string()
-    } else {
-        g.pattern.chars().map(pattern_arrow).collect()
-    };
-
-    let title_row = row![
-        text(pattern_preview).size(26),
-        column![
-            text(
-                g.label
-                    .clone()
-                    .unwrap_or_else(|| t(lang, S::Unnamed).into())
-            )
-            .size(15),
-            text(direction_words(lang, &g.pattern))
-                .size(11)
-                .color(muted()),
-        ]
-        .spacing(2),
+    editing_directions: bool,
+) -> Element<'_, Msg> {
+    let title = row![
+        text(t(lang, S::GestureDetails)).size(12).color(muted()),
         space::horizontal(),
-        checkbox(g.enabled).on_toggle(move |v| Msg::ToggleGesture(i, v)),
-        icon_button("×", Msg::RemoveGesture(i)),
+        text(&gesture.pattern).size(11).color(muted()),
     ]
-    .spacing(10)
     .align_y(alignment::Vertical::Center);
-
-    let pad = pattern_pad(i);
-    let pad_row = row![
-        pad,
-        column![
-            text(t(lang, S::DragDirection)).size(11).color(muted()),
-            Space::new().height(4),
-            row![
-                button(text(t(lang, S::DrawPattern)).size(11))
-                    .on_press(Msg::DrawPattern(i))
-                    .padding([4, 10])
-                    .style(secondary_button_style),
-                button(text(t(lang, S::Delete)).size(11))
-                    .on_press(Msg::PatternBackspace(i))
-                    .padding([4, 10])
-                    .style(secondary_button_style),
-                button(text(t(lang, S::Clear)).size(11))
-                    .on_press(Msg::PatternClear(i))
-                    .padding([4, 10])
-                    .style(secondary_button_style),
-            ]
-            .spacing(6),
-        ]
-        .spacing(6),
+    let keys = row![
+        text_input("LEFTCTRL + W", &gesture.keys.join(" + "))
+            .on_input(move |value| Msg::KeysChanged(index, value))
+            .padding(7)
+            .style(input_style),
+        action_button(
+            t(lang, if recording { S::PressKeys } else { S::Record }),
+            if recording { Msg::StopRecordKeys } else { Msg::StartRecordKeys(index) },
+            false,
+        ),
     ]
-    .spacing(16)
+    .spacing(5)
     .align_y(alignment::Vertical::Center);
-
-    let pattern_editor: Element<'_, Msg> = if drawing {
+    let pattern: Element<'_, Msg> = if drawing {
         column![
-            row![
-                text(t(lang, S::DrawPatternHint)).size(12).color(muted()),
-                space::horizontal(),
-                action_button(t(lang, S::Cancel), Msg::CancelDrawing, false),
-            ]
-            .align_y(alignment::Vertical::Center),
-            container(
-                canvas::Canvas::new(GestureDrawing(i))
-                    .width(Length::Fill)
-                    .height(150),
-            )
-            .style(card_style)
-            .clip(true),
+            text(t(lang, S::DrawPatternHint)).size(11).color(muted()),
+            container(canvas::Canvas::new(GestureDrawing(index)).width(Length::Fill).height(150))
+                .style(preview_style)
+                .clip(true),
+            action_button(t(lang, S::Cancel), Msg::CancelDrawing, false),
         ]
-        .spacing(6)
+        .spacing(5)
         .into()
     } else {
-        pad_row.into()
-    };
-    let grid = column![pattern_editor, row![keys_input, label_input].spacing(12)].spacing(10);
-
-    container(column![title_row, rule::horizontal(1), grid].spacing(12))
-        .padding(16)
-        .style(card_style)
+        let preview = container(
+            column![
+                canvas::Canvas::new(GesturePreview(&gesture.pattern)).width(Length::Fill).height(82),
+                container(text(direction_words(lang, &gesture.pattern)).size(11).color(muted()))
+                    .align_x(alignment::Horizontal::Center)
+                    .width(Length::Fill),
+            ]
+            .spacing(3),
+        )
+        .padding([5, 8])
         .width(Length::Fill)
-        .into()
+        .style(preview_style);
+        let controls = row![
+            action_button(t(lang, S::DrawPattern), Msg::DrawPattern(index), false),
+            action_button(
+                t(lang, if editing_directions { S::Done } else { S::DragDirection }),
+                Msg::EditDirections,
+                false,
+            ),
+        ]
+        .spacing(5);
+        let mut editor = column![preview, controls].spacing(6);
+        if editing_directions {
+            editor = editor.push(
+                row![
+                    pattern_pad(index),
+                    column![
+                        action_button(t(lang, S::Delete), Msg::PatternBackspace(index), false),
+                        action_button(t(lang, S::Clear), Msg::PatternClear(index), false),
+                    ]
+                    .spacing(4),
+                ]
+                .spacing(6)
+                .align_y(alignment::Vertical::Center),
+            );
+        }
+        editor.into()
+    };
+
+    container(
+        column![
+            title,
+            text(gesture.label.as_deref().unwrap_or(t(lang, S::Unnamed))).size(18),
+            pattern,
+            column![text(t(lang, S::Shortcut)).size(11).color(muted()), keys].spacing(4),
+            labeled_input(
+                t(lang, S::Description),
+                gesture.label.clone().unwrap_or_default(),
+                move |value| Msg::LabelChanged(index, value),
+                t(lang, S::OptionalDescription),
+            ),
+            rule::horizontal(1),
+            scope_toggle(
+                t(lang, S::EnableGesture),
+                t(lang, S::GestureOnly),
+                gesture.enabled,
+                move |enabled| Msg::ToggleGesture(index, enabled),
+            ),
+            action_button(t(lang, S::RemoveGesture), Msg::RemoveGesture(index), false),
+        ]
+        .spacing(8),
+    )
+    .padding(12)
+    .width(Length::Fill)
+    .style(card_style)
+    .into()
+}
+
+struct GesturePreview<'a>(&'a str);
+
+impl canvas::Program<Msg> for GesturePreview<'_> {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let mut points = vec![Point::ORIGIN];
+        for direction in self.0.chars() {
+            let (dx, dy) = match direction {
+                '1' => (-1.0, 1.0),
+                '2' => (0.0, 1.0),
+                '3' => (1.0, 1.0),
+                '4' => (-1.0, 0.0),
+                '6' => (1.0, 0.0),
+                '7' => (-1.0, -1.0),
+                '8' => (0.0, -1.0),
+                '9' => (1.0, -1.0),
+                _ => continue,
+            };
+            let last = points[points.len() - 1];
+            points.push(Point::new(last.x + dx, last.y + dy));
+        }
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        let guides = canvas::Path::new(|path| {
+            for x in (9..bounds.width as usize).step_by(12) {
+                for y in (9..bounds.height as usize).step_by(12) {
+                    path.move_to(Point::new(x as f32, y as f32));
+                    path.line_to(Point::new(x as f32 + 0.5, y as f32));
+                }
+            }
+        });
+        frame.stroke(&guides, canvas::Stroke::default().with_color(line()));
+        if points.len() > 1 {
+            let mut min = Point::ORIGIN;
+            let mut max = Point::ORIGIN;
+            for point in &points {
+                min.x = min.x.min(point.x);
+                min.y = min.y.min(point.y);
+                max.x = max.x.max(point.x);
+                max.y = max.y.max(point.y);
+            }
+            let scale = 52.0_f32
+                .min((bounds.width - 22.0).max(0.0) / (max.x - min.x).max(1.0))
+                .min((bounds.height - 18.0).max(0.0) / (max.y - min.y).max(1.0));
+            let center = Point::new((min.x + max.x) / 2.0, (min.y + max.y) / 2.0);
+            for point in &mut points {
+                point.x = bounds.width / 2.0 + (point.x - center.x) * scale;
+                point.y = bounds.height / 2.0 + (point.y - center.y) * scale;
+            }
+            let trail = canvas::Path::new(|path| {
+                path.move_to(points[0]);
+                for &point in &points[1..] {
+                    path.line_to(point);
+                }
+            });
+            frame.stroke(&trail, canvas::Stroke::default().with_width(3.0).with_color(accent()));
+            frame.fill(&canvas::Path::circle(points[0], 4.0), accent());
+            frame.fill(&canvas::Path::circle(points[0], 2.0), bg());
+            frame.fill(&canvas::Path::circle(points[points.len() - 1], 4.0), accent());
+        }
+        vec![frame.into_geometry()]
+    }
 }
 
 struct GestureDrawing(usize);
@@ -1160,34 +1468,6 @@ fn pattern_pad<'a>(i: usize) -> Element<'a, Msg> {
     column![r1, r2, r3].spacing(4).into()
 }
 
-fn add_card<'a>(lang: Lang) -> Element<'a, Msg> {
-    container(
-        button(
-            row![text("+").size(18), text(t(lang, S::AddGesture)).size(14)]
-                .spacing(8)
-                .align_y(alignment::Vertical::Center),
-        )
-        .on_press(Msg::AddGesture)
-        .padding([10, 16])
-        .style(|_theme, status| button::Style {
-            background: Some(Background::Color(match status {
-                button::Status::Hovered => hover_color(),
-                _ => card_color(),
-            })),
-            text_color: accent(),
-            border: Border {
-                radius: 12.0.into(),
-                width: 1.0,
-                color: Color::from_rgba(0.0, 0.0, 0.0, 0.06),
-            },
-            ..Default::default()
-        }),
-    )
-    .width(Length::Fill)
-    .align_x(alignment::Horizontal::Center)
-    .into()
-}
-
 fn labeled_input<'a, F>(
     label: &'static str,
     value: String,
@@ -1210,9 +1490,9 @@ where
 }
 
 fn action_button<'a>(label: &'a str, msg: Msg, primary: bool) -> Element<'a, Msg> {
-    button(text(label).size(13))
+    button(text(label).size(12))
         .on_press(msg)
-        .padding([8, 16])
+        .padding([6, 10])
         .style(move |_theme, status| {
             let (bg_color, fg) = if primary {
                 (
@@ -1245,25 +1525,6 @@ fn action_button<'a>(label: &'a str, msg: Msg, primary: bool) -> Element<'a, Msg
                 shadow: Shadow::default(),
                 ..Default::default()
             }
-        })
-        .into()
-}
-
-fn icon_button<'a>(label: &'a str, msg: Msg) -> Element<'a, Msg> {
-    button(text(label).size(18).color(muted()))
-        .on_press(msg)
-        .padding(4)
-        .style(|_theme, status| button::Style {
-            background: Some(Background::Color(match status {
-                button::Status::Hovered => Color::from_rgba(0.95, 0.3, 0.3, 0.15),
-                _ => Color::TRANSPARENT,
-            })),
-            text_color: Color::from_rgb(0.6, 0.2, 0.2),
-            border: Border {
-                radius: 6.0.into(),
-                ..Default::default()
-            },
-            ..Default::default()
         })
         .into()
 }
@@ -1362,31 +1623,40 @@ fn toast(msg: &str) -> Element<'_, Msg> {
             text_color: Some(Color::WHITE),
             ..Default::default()
         })
-        .align_x(alignment::Horizontal::Center)
-        .width(Length::Fill)
+        .max_width(440)
         .into()
 }
 
 fn card_style(_theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Background::Color(card_color())),
-        border: Border {
-            radius: 14.0.into(),
-            width: 1.0,
-            color: Color::from_rgba(0.0, 0.0, 0.0, 0.05),
-        },
-        shadow: Shadow {
-            color: Color::from_rgba(0.0, 0.0, 0.0, 0.05),
-            offset: Vector::new(0.0, 1.0),
-            blur_radius: 4.0,
-        },
-        ..Default::default()
-    }
+    container::background(card_color()).border(Border {
+        radius: 9.0.into(),
+        width: 1.0,
+        color: line(),
+    })
+}
+
+fn preview_style(_theme: &Theme) -> container::Style {
+    container::background(bg()).border(Border {
+        radius: 7.0.into(),
+        width: 1.0,
+        color: line(),
+    })
+}
+
+fn switch_style(theme: &Theme, status: toggler::Status) -> toggler::Style {
+    let mut style = toggler::default(theme, status);
+    let enabled = match status {
+        toggler::Status::Active { is_toggled } | toggler::Status::Hovered { is_toggled } => is_toggled,
+        toggler::Status::Disabled { .. } => false,
+    };
+    style.background = Background::Color(if enabled { accent() } else { muted() });
+    style.foreground = Background::Color(bg());
+    style
 }
 
 fn input_style(_theme: &Theme, _status: text_input::Status) -> text_input::Style {
     text_input::Style {
-        background: Background::Color(Color::from_rgba(1.0, 1.0, 1.0, 0.7)),
+        background: Background::Color(bg()),
         border: Border {
             radius: 8.0.into(),
             width: 1.0,
@@ -1395,14 +1665,14 @@ fn input_style(_theme: &Theme, _status: text_input::Status) -> text_input::Style
         icon: muted(),
         placeholder: muted(),
         value: Color::from_rgb(0.1, 0.1, 0.12),
-        selection: Color::from_rgba(0.0, 0.48, 1.0, 0.25),
+        selection: hover_color(),
     }
 }
 
 fn pad_button_style(_theme: &Theme, status: button::Status) -> button::Style {
     button::Style {
         background: Some(Background::Color(match status {
-            button::Status::Hovered => Color::from_rgba(0.0, 0.48, 1.0, 0.12),
+            button::Status::Hovered => hover_color(),
             _ => Color::from_rgba(0.0, 0.0, 0.0, 0.04),
         })),
         text_color: Color::from_rgb(0.12, 0.12, 0.14),
@@ -1433,7 +1703,7 @@ fn secondary_button_style(_theme: &Theme, status: button::Status) -> button::Sty
 
 fn sidebar_button_style(status: button::Status, selected: bool) -> button::Style {
     let bg_color = if selected {
-        Color::from_rgba(0.0, 0.48, 1.0, 0.12)
+        hover_color()
     } else {
         match status {
             button::Status::Hovered => Color::from_rgba(0.0, 0.0, 0.0, 0.04),
@@ -1578,27 +1848,29 @@ fn direction_words(lang: Lang, p: &str) -> String {
 }
 
 fn bg() -> Color {
-    Color::from_rgb(0.96, 0.96, 0.97)
+    Color::from_rgb8(255, 255, 255)
 }
 fn sidebar_color() -> Color {
-    Color::from_rgb(0.94, 0.94, 0.96)
+    Color::from_rgb8(244, 247, 248)
 }
 fn card_color() -> Color {
-    Color::from_rgb(1.0, 1.0, 1.0)
+    Color::from_rgb8(246, 248, 249)
 }
 fn hover_color() -> Color {
-    Color::from_rgb(0.93, 0.93, 0.95)
+    Color::from_rgb8(229, 241, 238)
+}
+fn line() -> Color {
+    Color::from_rgb8(219, 228, 230)
 }
 fn muted() -> Color {
-    Color::from_rgb(0.5, 0.5, 0.55)
+    Color::from_rgb8(88, 105, 111)
 }
 fn accent() -> Color {
-    Color::from_rgb(0.0, 0.48, 1.0)
+    Color::from_rgb8(28, 102, 91)
 }
 fn accent_hover() -> Color {
-    Color::from_rgb(0.0, 0.42, 0.9)
+    Color::from_rgb8(23, 85, 76)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1629,6 +1901,21 @@ mod tests {
     }
 
     #[test]
+    fn adding_a_group_opens_its_editor() {
+        let (mut app, _) = App::new();
+        app.cfg = Config::default();
+        let _ = app.update(Msg::ShowSettings);
+
+        let _ = app.update(Msg::AddGroup);
+
+        assert!(app.page == Page::Groups);
+        assert!(app.managing_group);
+        assert!(app.dirty);
+        assert_eq!(app.current_group().unwrap().name, "New Group");
+        assert!(app.current_group().unwrap().gestures.is_empty());
+    }
+
+    #[test]
     fn copying_a_group_keeps_its_bindings_and_selects_the_copy() {
         let (mut app, _) = App::new();
         app.cfg = Config::default();
@@ -1645,7 +1932,7 @@ mod tests {
             }],
         });
 
-        let _ = app.update(Msg::CopyGroup);
+        let _ = app.update(Msg::CopyGroup(0));
 
         assert_eq!(app.selected_group, 1);
         assert!(app.dirty);
