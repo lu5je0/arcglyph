@@ -1,8 +1,10 @@
 # ArcGlyph
 
-ArcGlyph maps mouse gestures to keyboard shortcuts on KDE Plasma and GNOME
-Wayland. Hold the **right mouse button**, draw a gesture, then release. ArcGlyph
-shows the trail as you draw and sends the matching shortcut to the focused app.
+ArcGlyph is a global mouse gesture tool for Wayland on KDE Plasma and GNOME.
+Use gestures across applications or set up app-specific bindings.
+
+Hold the **right mouse button**, draw a gesture, then release. ArcGlyph shows
+the trail as you draw and sends the matching shortcut to the focused app.
 
 ![ArcGlyph preferences showing browser gestures and the New tab gesture editor](assets/screenshots/gesture-groups.png)
 
