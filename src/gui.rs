@@ -8,7 +8,7 @@ use iced::{
         button, canvas, column, container, mouse_area, row, rule, scrollable, space, text,
         text_input, toggler, tooltip, Column, Stack,
     },
-    window, Background, Border, Color, Element, Event, Length, Point, Rectangle, Renderer, Shadow,
+    window, Background, Border, Color, Element, Event, Font, Length, Point, Rectangle, Renderer,
     Size, Subscription, Task, Theme,
 };
 use std::sync::{Mutex, OnceLock};
@@ -41,6 +41,10 @@ pub fn run() -> iced::Result {
     let mut app = iced::daemon(App::new, App::update, App::view)
         .title(App::title)
         .theme(App::theme)
+        .style(|_, _| iced::theme::Style {
+            background_color: bg(),
+            text_color: ink(),
+        })
         .subscription(App::subscription);
     let font_paths = std::env::var_os("ARCGLYPH_FONT")
         .map(std::path::PathBuf::from)
@@ -56,9 +60,15 @@ pub fn run() -> iced::Result {
             break;
         }
     }
-    app.default_font(iced::Font::with_name("Noto Sans CJK SC"))
+    app.default_font(UI_FONT)
         .run()
 }
+
+const UI_FONT: Font = Font::with_name("Noto Sans CJK SC");
+const EMPHASIS: Font = Font {
+    weight: iced::font::Weight::Semibold,
+    ..UI_FONT
+};
 
 const FONT_CANDIDATES: &[&str] = &[
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
@@ -109,6 +119,7 @@ pub enum Msg {
     KeyRecordedEvent(iced::keyboard::Key, iced::keyboard::Modifiers),
     // top-right
     Save,
+    Quit,
     Toast(String),
     ToastClear,
     // permission banner
@@ -262,7 +273,7 @@ impl App {
                 }
                 return self.ensure_window();
             }
-            Msg::Tray(ExternalMsg::Quit) => std::process::exit(0),
+            Msg::Quit | Msg::Tray(ExternalMsg::Quit) => std::process::exit(0),
             Msg::WindowOpened(id) => {
                 self.window = Some(id);
             }
@@ -672,11 +683,16 @@ impl App {
             Page::Settings => S::AppSettings,
         };
         let toolbar = row![
-            text(t(lang, section)).size(13).color(muted()),
+            text(t(lang, section)).size(12).font(EMPHASIS).color(muted()),
             space::horizontal(),
-            text(t(lang, if self.dirty { S::Unsaved } else { S::Synced }))
-                .size(12)
-                .color(muted()),
+            row![
+                text("●").size(9).color(if self.dirty { warm() } else { accent() }),
+                text(t(lang, if self.dirty { S::Unsaved } else { S::Synced }))
+                    .size(12)
+                    .color(muted()),
+            ]
+            .spacing(5)
+            .align_y(alignment::Vertical::Center),
             action_button(t(lang, S::Save), Msg::Save, true),
         ]
         .spacing(10)
@@ -722,7 +738,7 @@ impl App {
 
         let heading = row![
             column![
-                text(&group.name).size(29),
+                text(&group.name).size(32).font(EMPHASIS),
                 text(t(lang, S::GroupScope)).size(12).color(muted()),
             ]
             .spacing(4)
@@ -739,16 +755,18 @@ impl App {
         ]
         .spacing(12)
         .align_y(alignment::Vertical::Center);
-        let associated = if group.apps.is_empty() {
-            t(lang, S::AppliesAll).to_string()
+        let associated: Element<'_, Msg> = if group.apps.is_empty() {
+            tag(t(lang, S::AppliesAll), muted())
         } else {
-            group.apps.join("  ·  ")
+            let mut badges = iced::widget::Row::new().spacing(5);
+            for app in &group.apps {
+                badges = badges.push(tag(app, muted()));
+            }
+            badges.into()
         };
         let apps = row![
             text(t(lang, S::AssociatedApps)).size(12).color(muted()),
-            container(text(associated).size(12).wrapping(iced::widget::text::Wrapping::None))
-                .width(Length::Fill)
-                .clip(true),
+            container(associated).width(Length::Fill).clip(true),
             action_button(
                 t(lang, if self.managing_group { S::Done } else { S::ManageGroup }),
                 Msg::ManageGroup,
@@ -763,7 +781,7 @@ impl App {
         } else {
             self.gesture_workspace(group)
         };
-        column![heading, apps, rule::horizontal(1), editor]
+        column![heading, apps, divider(), editor]
             .spacing(11)
             .height(Length::Fill)
             .into()
@@ -791,6 +809,7 @@ impl App {
                 .on_input(Msg::GroupAppInput)
                 .on_submit(Msg::GroupAttachApp)
                 .padding(8)
+                .size(13)
                 .style(input_style),
             action_button(t(lang, S::Add), Msg::GroupAttachApp, false),
             button(text(t(lang, if self.picking.is_some() {
@@ -813,18 +832,23 @@ impl App {
 
     fn gesture_workspace<'a>(&'a self, group: &'a GroupCfg) -> Element<'a, Msg> {
         let lang = self.lang();
-        let mut list = Column::new().spacing(2);
+        let mut list = Column::new().spacing(1);
         for (index, gesture) in group.gestures.iter().enumerate() {
+            if index > 0 {
+                list = list.push(divider());
+            }
             list = list.push(gesture_row(lang, index, gesture, self.selected_gesture == index));
         }
+        let rows = preferences_scroll(list);
         let toolbar = row![
-            text(format!("{}  {}", t(lang, S::Gestures), group.gestures.len())).size(15),
+            text(t(lang, S::Gestures)).size(15).font(EMPHASIS),
+            tag(group.gestures.len().to_string(), muted()),
             space::horizontal(),
             action_button(t(lang, S::AddGesture), Msg::AddGesture, false),
         ]
         .spacing(6)
         .align_y(alignment::Vertical::Center);
-        let list = column![toolbar, preferences_scroll(list)]
+        let list = column![toolbar, rows]
             .spacing(7)
             .width(Length::Fill)
             .height(Length::Fill);
@@ -858,8 +882,8 @@ impl App {
             Lang::Zh => ("English", Lang::En),
         };
         let recognition = column![
-            text(t(lang, S::GestureRecognition)).size(15),
-            rule::horizontal(1),
+            text(t(lang, S::GestureRecognition)).size(14).font(EMPHASIS),
+            divider(),
             scope_toggle(
                 t(lang, S::GlobalSwitch),
                 t(lang, S::GlobalScope),
@@ -869,15 +893,15 @@ impl App {
         ]
         .spacing(9);
         let startup = column![
-            text(t(lang, S::StartupAndTray)).size(15),
-            rule::horizontal(1),
+            text(t(lang, S::StartupAndTray)).size(14).font(EMPHASIS),
+            divider(),
             scope_toggle(
                 t(lang, S::LaunchAtLogin),
                 t(lang, S::LoginScope),
                 self.autostart,
                 Msg::ToggleAutostart,
             ),
-            rule::horizontal(1),
+            divider(),
             scope_toggle(
                 t(lang, S::ShowTray),
                 t(lang, S::TrayScope),
@@ -887,8 +911,8 @@ impl App {
         ]
         .spacing(9);
         let interface = column![
-            text(t(lang, S::InterfaceAndConfig)).size(15),
-            rule::horizontal(1),
+            text(t(lang, S::InterfaceAndConfig)).size(14).font(EMPHASIS),
+            divider(),
             row![
                 text(t(lang, S::Language)).size(13),
                 space::horizontal(),
@@ -896,18 +920,32 @@ impl App {
             ]
             .align_y(alignment::Vertical::Center),
             text(t(lang, S::ConfigFile)).size(13),
-            text(config::path().display().to_string()).size(12).color(muted()),
+            text(config::path().display().to_string())
+                .font(Font::MONOSPACE)
+                .size(12)
+                .color(muted()),
         ]
         .spacing(8);
         preferences_scroll(
             column![
-                text(t(lang, S::AppSettings)).size(29),
-                recognition,
-                startup,
-                interface,
+                text(t(lang, S::AppSettings)).size(32).font(EMPHASIS),
+                settings_panel(recognition),
+                settings_panel(startup),
+                settings_panel(interface),
+                column![
+                    divider(),
+                    row![
+                        text(t(lang, S::ExitAppDescription)).size(12).color(muted()),
+                        space::horizontal(),
+                        action_button(t(lang, S::ExitApp), Msg::Quit, false),
+                    ]
+                    .spacing(10)
+                    .align_y(alignment::Vertical::Center),
+                ]
+                .spacing(9),
             ]
-            .spacing(22)
-            .padding([0, 10])
+            .spacing(15)
+            .padding([0, 4])
             .width(Length::Fill),
         )
         .into()
@@ -934,7 +972,7 @@ impl App {
             tooltip::Position::Right,
         );
         let group_title = row![
-            text(t(lang, S::Groups)).size(12).color(muted()),
+            text(t(lang, S::Groups)).size(11).font(EMPHASIS).color(muted()),
             space::horizontal(),
             add,
         ]
@@ -943,7 +981,7 @@ impl App {
             row![
                 text("●").size(11).color(if self.cfg.enabled { accent() } else { muted() }),
                 column![
-                    text(t(lang, S::GlobalGestures)).size(13),
+                    text(t(lang, S::GlobalGestures)).size(13).font(EMPHASIS),
                     text(t(lang, if self.cfg.enabled { S::Running } else { S::Paused }))
                         .size(11)
                         .color(muted()),
@@ -960,16 +998,16 @@ impl App {
         .style(secondary_button_style);
         let sidebar = column![
             row![
-                container(text("↗").size(14).color(Color::WHITE))
-                    .padding([2, 6])
-                    .style(|_| container::background(accent()).border(iced::border::rounded(6))),
-                text("ArcGlyph").size(17),
+                container(symbol(Symbol::Arc, Color::WHITE))
+                    .padding(5)
+                    .style(|_| container::background(accent()).border(iced::border::rounded(7))),
+                text("ArcGlyph").size(17).font(EMPHASIS),
             ]
             .spacing(7)
             .align_y(alignment::Vertical::Center),
-            navigation_button(t(lang, S::GestureGroups), Msg::ShowGroups, self.page == Page::Groups),
-            navigation_button(t(lang, S::AppSettings), Msg::ShowSettings, self.page == Page::Settings),
-            rule::horizontal(1),
+            navigation_button(Symbol::Groups, t(lang, S::GestureGroups), Msg::ShowGroups, self.page == Page::Groups),
+            navigation_button(Symbol::Settings, t(lang, S::AppSettings), Msg::ShowSettings, self.page == Page::Settings),
+            divider(),
             group_title,
             preferences_scroll(groups),
             global_status,
@@ -979,7 +1017,11 @@ impl App {
             .padding(12)
             .width(166)
             .height(Length::Fill)
-            .style(|_| container::background(sidebar_color()))
+            .style(|_| container::background(sidebar_color()).border(Border {
+                width: 1.0,
+                color: line(),
+                ..Border::default()
+            }))
             .into()
     }
 }
@@ -1099,22 +1141,55 @@ fn scope_toggle<'a>(
     on_toggle: impl Fn(bool) -> Msg + 'a,
 ) -> Element<'a, Msg> {
     row![
-        column![text(title).size(13), text(scope).size(11).color(muted())].spacing(2),
+        column![text(title).size(13).font(EMPHASIS), text(scope).size(11).color(muted())].spacing(2),
         space::horizontal(),
-        toggler(enabled).on_toggle(on_toggle).size(16).style(switch_style),
+        toggler(enabled).on_toggle(on_toggle).size(17).style(switch_style),
     ]
     .spacing(9)
     .align_y(alignment::Vertical::Center)
     .into()
 }
 
-fn navigation_button(label: &str, action: Msg, active: bool) -> Element<'_, Msg> {
-    button(text(label).size(13))
-        .on_press(action)
-        .padding([8, 10])
+fn navigation_button(kind: Symbol, label: &str, action: Msg, active: bool) -> Element<'_, Msg> {
+    button(
+        row![
+            symbol(kind, if active { accent() } else { muted() }),
+            text(label).size(13).font(EMPHASIS),
+        ]
+        .spacing(7)
+        .align_y(alignment::Vertical::Center),
+    )
+    .on_press(action)
+    .padding([8, 10])
+    .width(Length::Fill)
+    .style(move |_, status| sidebar_button_style(status, active))
+    .into()
+}
+
+fn tag<'a>(label: impl iced::widget::text::IntoFragment<'a>, color: Color) -> Element<'a, Msg> {
+    container(
+        text(label).size(11).color(color).wrapping(iced::widget::text::Wrapping::None),
+    )
+    .padding([2, 6])
+    .style(|_| container::background(soft()).border(iced::border::rounded(6)))
+    .into()
+}
+
+fn settings_panel<'a>(content: impl Into<Element<'a, Msg>>) -> Element<'a, Msg> {
+    container(content)
+        .padding([9, 12])
         .width(Length::Fill)
-        .style(move |_, status| sidebar_button_style(status, active))
+        .style(card_style)
         .into()
+}
+
+fn divider<'a>() -> rule::Rule<'a, Theme> {
+    rule::horizontal(1).style(|_| rule::Style {
+        color: line(),
+        radius: 0.0.into(),
+        fill_mode: rule::FillMode::Full,
+        snap: true,
+    })
 }
 
 fn gesture_row(lang: Lang, index: usize, gesture: &GestureCfg, selected: bool) -> Element<'_, Msg> {
@@ -1140,9 +1215,19 @@ fn gesture_row(lang: Lang, index: usize, gesture: &GestureCfg, selected: bool) -
     let state = if gesture.enabled { S::Enabled } else { S::Paused };
     button(
         row![
-            container(text(arrows).size(17).color(accent()).wrapping(iced::widget::text::Wrapping::None))
-                .width(44)
-                .clip(true),
+            container(
+                text(arrows)
+                    .size(16)
+                    .font(EMPHASIS)
+                    .color(accent())
+                    .wrapping(iced::widget::text::Wrapping::None),
+            )
+            .width(42)
+            .height(25)
+            .align_x(alignment::Horizontal::Center)
+            .align_y(alignment::Vertical::Center)
+            .style(|_| container::background(soft()).border(iced::border::rounded(6)))
+            .clip(true),
             container(
                 text(gesture.label.as_deref().unwrap_or(t(lang, S::Unnamed)))
                     .size(13)
@@ -1150,24 +1235,33 @@ fn gesture_row(lang: Lang, index: usize, gesture: &GestureCfg, selected: bool) -
             )
             .width(Length::Fill)
             .clip(true),
-            container(text(shortcut).size(11).wrapping(iced::widget::text::Wrapping::None))
-                .max_width(102)
-                .padding([2, 5])
-                .style(card_style)
-                .clip(true),
-            text(t(lang, state)).size(11).color(if gesture.enabled { accent() } else { muted() }),
+            container(
+                text(shortcut)
+                    .size(11)
+                    .font(Font::MONOSPACE)
+                    .wrapping(iced::widget::text::Wrapping::None),
+            )
+            .max_width(102)
+            .padding([2, 6])
+            .style(preview_style)
+            .clip(true),
+            row![
+                text("●").size(8).color(if gesture.enabled { accent() } else { muted() }),
+                text(t(lang, state)).size(11).color(if gesture.enabled { accent() } else { muted() }),
+            ]
+            .spacing(4)
+            .align_y(alignment::Vertical::Center),
         ]
         .spacing(7)
         .align_y(alignment::Vertical::Center),
     )
     .on_press(Msg::SelectGesture(index))
     .width(Length::Fill)
-    .padding([8, 7])
+    .padding([6, 8])
     .style(move |_, status| {
         let mut style = sidebar_button_style(status, selected);
-        if !selected {
-            style.border.color = line();
-            style.border.width = 1.0;
+        if !selected && status == button::Status::Active {
+            style.background = Some(Background::Color(surface()));
         }
         style
     })
@@ -1183,15 +1277,16 @@ fn gesture_inspector(
     editing_directions: bool,
 ) -> Element<'_, Msg> {
     let title = row![
-        text(t(lang, S::GestureDetails)).size(12).color(muted()),
+        text(t(lang, S::GestureDetails)).size(12).font(EMPHASIS).color(muted()),
         space::horizontal(),
-        text(&gesture.pattern).size(11).color(muted()),
+        tag(&gesture.pattern, muted()),
     ]
     .align_y(alignment::Vertical::Center);
     let keys = row![
         text_input("LEFTCTRL + W", &gesture.keys.join(" + "))
             .on_input(move |value| Msg::KeysChanged(index, value))
-            .padding(7)
+            .padding(8)
+            .size(13)
             .style(input_style),
         action_button(
             t(lang, if recording { S::PressKeys } else { S::Record }),
@@ -1254,7 +1349,7 @@ fn gesture_inspector(
     container(
         column![
             title,
-            text(gesture.label.as_deref().unwrap_or(t(lang, S::Unnamed))).size(18),
+            text(gesture.label.as_deref().unwrap_or(t(lang, S::Unnamed))).size(19).font(EMPHASIS),
             pattern,
             column![text(t(lang, S::Shortcut)).size(11).color(muted()), keys].spacing(4),
             labeled_input(
@@ -1263,7 +1358,7 @@ fn gesture_inspector(
                 move |value| Msg::LabelChanged(index, value),
                 t(lang, S::OptionalDescription),
             ),
-            rule::horizontal(1),
+            divider(),
             scope_toggle(
                 t(lang, S::EnableGesture),
                 t(lang, S::GestureOnly),
@@ -1318,7 +1413,13 @@ impl canvas::Program<Msg> for GesturePreview<'_> {
                 }
             }
         });
-        frame.stroke(&guides, canvas::Stroke::default().with_color(line()));
+        frame.stroke(
+            &guides,
+            canvas::Stroke::default()
+                .with_width(1.35)
+                .with_line_cap(canvas::LineCap::Round)
+                .with_color(Color::from_rgb8(182, 205, 198)),
+        );
         if points.len() > 1 {
             let mut min = Point::ORIGIN;
             let mut max = Point::ORIGIN;
@@ -1342,7 +1443,14 @@ impl canvas::Program<Msg> for GesturePreview<'_> {
                     path.line_to(point);
                 }
             });
-            frame.stroke(&trail, canvas::Stroke::default().with_width(3.0).with_color(accent()));
+            frame.stroke(
+                &trail,
+                canvas::Stroke::default()
+                    .with_width(3.0)
+                    .with_line_cap(canvas::LineCap::Round)
+                    .with_line_join(canvas::LineJoin::Round)
+                    .with_color(accent()),
+            );
             frame.fill(&canvas::Path::circle(points[0], 4.0), accent());
             frame.fill(&canvas::Path::circle(points[0], 2.0), bg());
             frame.fill(&canvas::Path::circle(points[points.len() - 1], 4.0), accent());
@@ -1458,7 +1566,7 @@ fn pattern_pad<'a>(i: usize) -> Element<'a, Msg> {
             .on_press(Msg::PatternAppend(i, c))
             .padding([8, 12])
             .width(Length::Fixed(44.0))
-            .style(pad_button_style)
+            .style(secondary_button_style)
             .into()
     };
     let blank = || -> Element<'a, Msg> { container(text(" ")).width(Length::Fixed(44.0)).into() };
@@ -1482,6 +1590,7 @@ where
         text_input(placeholder, &value)
             .on_input(on_change)
             .padding(8)
+            .size(13)
             .style(input_style),
     ]
     .spacing(4)
@@ -1490,43 +1599,120 @@ where
 }
 
 fn action_button<'a>(label: &'a str, msg: Msg, primary: bool) -> Element<'a, Msg> {
-    button(text(label).size(12))
+    let icon = match &msg {
+        Msg::Save => Some(Symbol::Check),
+        Msg::AddGroup | Msg::AddGesture => Some(Symbol::Add),
+        Msg::DrawPattern(_) => Some(Symbol::Draw),
+        Msg::Quit => Some(Symbol::Quit),
+        _ => None,
+    };
+    let mut content = iced::widget::Row::new()
+        .spacing(5)
+        .align_y(alignment::Vertical::Center);
+    if let Some(icon) = icon {
+        content = content.push(symbol(icon, if primary { Color::WHITE } else { accent() }));
+    }
+    if !matches!(msg, Msg::AddGroup) {
+        content = content.push(text(label).size(12).font(EMPHASIS));
+    }
+    button(content)
         .on_press(msg)
-        .padding([6, 10])
-        .style(move |_theme, status| {
-            let (bg_color, fg) = if primary {
-                (
-                    match status {
-                        button::Status::Hovered => Color {
-                            a: 1.0,
-                            ..accent_hover()
-                        },
-                        _ => accent(),
-                    },
-                    Color::WHITE,
-                )
+        .padding([6, 9])
+        .style(move |theme, status| {
+            if primary {
+                let background = match status {
+                    button::Status::Pressed | button::Status::Hovered => accent_hover(),
+                    _ => accent(),
+                };
+                button::Style {
+                    background: Some(Background::Color(background)),
+                    text_color: Color::WHITE,
+                    border: iced::border::rounded(8),
+                    ..button::Style::default()
+                }
             } else {
-                (
-                    match status {
-                        button::Status::Hovered => hover_color(),
-                        _ => card_color(),
-                    },
-                    Color::from_rgb(0.15, 0.15, 0.17),
-                )
-            };
-            button::Style {
-                background: Some(Background::Color(bg_color)),
-                text_color: fg,
-                border: Border {
-                    radius: 8.0.into(),
-                    width: 0.0,
-                    color: Color::TRANSPARENT,
-                },
-                shadow: Shadow::default(),
-                ..Default::default()
+                secondary_button_style(theme, status)
             }
         })
         .into()
+}
+
+#[derive(Clone, Copy)]
+enum Symbol {
+    Arc,
+    Groups,
+    Settings,
+    Add,
+    Check,
+    Draw,
+    Quit,
+}
+
+fn symbol(kind: Symbol, color: Color) -> canvas::Canvas<Glyph, Msg> {
+    canvas::Canvas::new(Glyph { kind, color }).width(16).height(16)
+}
+
+struct Glyph {
+    kind: Symbol,
+    color: Color,
+}
+
+impl canvas::Program<Msg> for Glyph {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let lines: &[&[(f32, f32)]] = match self.kind {
+            Symbol::Arc => &[&[(3.0, 11.5), (7.0, 4.5), (12.5, 9.0)], &[(9.4, 9.0), (12.5, 9.0), (12.5, 5.9)]],
+            Symbol::Groups => &[
+                &[(2.3, 5.6), (8.0, 2.5), (13.7, 5.6), (8.0, 8.7), (2.3, 5.6)],
+                &[(2.3, 9.0), (8.0, 12.1), (13.7, 9.0)],
+            ],
+            Symbol::Settings => &[
+                &[(2.5, 4.0), (13.5, 4.0)],
+                &[(2.5, 8.0), (13.5, 8.0)],
+                &[(2.5, 12.0), (13.5, 12.0)],
+                &[(6.0, 2.5), (6.0, 5.5)],
+                &[(10.0, 6.5), (10.0, 9.5)],
+                &[(6.0, 10.5), (6.0, 13.5)],
+            ],
+            Symbol::Add => &[&[(3.5, 8.0), (12.5, 8.0)], &[(8.0, 3.5), (8.0, 12.5)]],
+            Symbol::Check => &[&[(3.4, 8.2), (6.5, 11.2), (12.7, 5.0)]],
+            Symbol::Draw => &[
+                &[(3.2, 12.7), (4.0, 9.5), (10.9, 2.6), (13.4, 5.1), (6.5, 12.0), (3.2, 12.7)],
+                &[(9.4, 4.1), (11.9, 6.6)],
+            ],
+            Symbol::Quit => &[
+                &[(7.3, 3.0), (3.3, 3.0), (3.3, 13.0), (7.3, 13.0)],
+                &[(6.0, 8.0), (13.2, 8.0)],
+                &[(10.7, 5.5), (13.2, 8.0), (10.7, 10.5)],
+            ],
+        };
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        let path = canvas::Path::new(|path| {
+            for line in lines {
+                path.move_to(Point::new(line[0].0, line[0].1));
+                for &(x, y) in &line[1..] {
+                    path.line_to(Point::new(x, y));
+                }
+            }
+        });
+        frame.stroke(
+            &path,
+            canvas::Stroke::default()
+                .with_width(1.45)
+                .with_color(self.color)
+                .with_line_cap(canvas::LineCap::Round)
+                .with_line_join(canvas::LineJoin::Round),
+        );
+        vec![frame.into_geometry()]
+    }
 }
 
 fn perm_banner<'a>(lang: Lang, fixing: bool, fix_done: bool) -> Element<'a, Msg> {
@@ -1628,15 +1814,16 @@ fn toast(msg: &str) -> Element<'_, Msg> {
 }
 
 fn card_style(_theme: &Theme) -> container::Style {
-    container::background(card_color()).border(Border {
-        radius: 9.0.into(),
-        width: 1.0,
-        color: line(),
-    })
+    container::background(surface())
+        .border(Border {
+            radius: 11.0.into(),
+            width: 1.0,
+            color: line(),
+        })
 }
 
 fn preview_style(_theme: &Theme) -> container::Style {
-    container::background(bg()).border(Border {
+    container::background(soft()).border(Border {
         radius: 7.0.into(),
         width: 1.0,
         color: line(),
@@ -1645,82 +1832,71 @@ fn preview_style(_theme: &Theme) -> container::Style {
 
 fn switch_style(theme: &Theme, status: toggler::Status) -> toggler::Style {
     let mut style = toggler::default(theme, status);
-    let enabled = match status {
-        toggler::Status::Active { is_toggled } | toggler::Status::Hovered { is_toggled } => is_toggled,
-        toggler::Status::Disabled { .. } => false,
+    let (enabled, hovered) = match status {
+        toggler::Status::Active { is_toggled } | toggler::Status::Disabled { is_toggled } => (is_toggled, false),
+        toggler::Status::Hovered { is_toggled } => (is_toggled, true),
     };
-    style.background = Background::Color(if enabled { accent() } else { muted() });
-    style.foreground = Background::Color(bg());
+    style.background = Background::Color(match (enabled, hovered) {
+        (true, true) => accent_hover(),
+        (true, false) => accent(),
+        (false, true) => Color::from_rgb8(118, 134, 130),
+        (false, false) => Color::from_rgb8(145, 161, 157),
+    });
+    style.foreground = Background::Color(surface());
+    style.foreground_border_width = 0.5;
+    style.foreground_border_color = Color::from_rgba(0.1, 0.2, 0.19, 0.10);
+    style.padding_ratio = 0.12;
     style
 }
 
-fn input_style(_theme: &Theme, _status: text_input::Status) -> text_input::Style {
+fn input_style(_theme: &Theme, status: text_input::Status) -> text_input::Style {
+    let border_color = match status {
+        text_input::Status::Focused { .. } => accent(),
+        text_input::Status::Hovered => Color::from_rgb8(166, 185, 179),
+        _ => line(),
+    };
     text_input::Style {
-        background: Background::Color(bg()),
+        background: Background::Color(soft()),
         border: Border {
-            radius: 8.0.into(),
+            radius: 7.0.into(),
             width: 1.0,
-            color: Color::from_rgba(0.0, 0.0, 0.0, 0.08),
+            color: border_color,
         },
         icon: muted(),
         placeholder: muted(),
-        value: Color::from_rgb(0.1, 0.1, 0.12),
+        value: ink(),
         selection: hover_color(),
     }
 }
 
-fn pad_button_style(_theme: &Theme, status: button::Status) -> button::Style {
+fn secondary_button_style(_theme: &Theme, status: button::Status) -> button::Style {
+    let (background, text_color) = match status {
+        button::Status::Hovered | button::Status::Pressed => (hover_color(), accent()),
+        button::Status::Disabled => (soft(), muted()),
+        button::Status::Active => (surface(), ink()),
+    };
     button::Style {
-        background: Some(Background::Color(match status {
-            button::Status::Hovered => hover_color(),
-            _ => Color::from_rgba(0.0, 0.0, 0.0, 0.04),
-        })),
-        text_color: Color::from_rgb(0.12, 0.12, 0.14),
+        background: Some(Background::Color(background)),
+        text_color,
         border: Border {
             radius: 8.0.into(),
             width: 1.0,
-            color: Color::from_rgba(0.0, 0.0, 0.0, 0.08),
-        },
-        ..Default::default()
-    }
-}
-
-fn secondary_button_style(_theme: &Theme, status: button::Status) -> button::Style {
-    button::Style {
-        background: Some(Background::Color(match status {
-            button::Status::Hovered => hover_color(),
-            _ => card_color(),
-        })),
-        text_color: Color::from_rgb(0.2, 0.2, 0.22),
-        border: Border {
-            radius: 6.0.into(),
-            width: 1.0,
-            color: Color::from_rgba(0.0, 0.0, 0.0, 0.08),
+            color: line(),
         },
         ..Default::default()
     }
 }
 
 fn sidebar_button_style(status: button::Status, selected: bool) -> button::Style {
-    let bg_color = if selected {
-        hover_color()
-    } else {
-        match status {
-            button::Status::Hovered => Color::from_rgba(0.0, 0.0, 0.0, 0.04),
-            _ => Color::TRANSPARENT,
-        }
+    let (background, text_color) = match (selected, status) {
+        (true, _) => (hover_color(), accent()),
+        (false, button::Status::Hovered | button::Status::Pressed) => (soft(), ink()),
+        _ => (Color::TRANSPARENT, ink()),
     };
     button::Style {
-        background: Some(Background::Color(bg_color)),
-        text_color: if selected {
-            accent()
-        } else {
-            Color::from_rgb(0.15, 0.15, 0.17)
-        },
-        border: Border {
-            radius: 8.0.into(),
-            ..Default::default()
-        },
+        background: Some(Background::Color(background)),
+        text_color,
+        border: iced::border::rounded(7),
         ..Default::default()
     }
 }
@@ -1848,28 +2024,37 @@ fn direction_words(lang: Lang, p: &str) -> String {
 }
 
 fn bg() -> Color {
-    Color::from_rgb8(255, 255, 255)
+    Color::from_rgb8(247, 249, 248)
+}
+fn surface() -> Color {
+    Color::WHITE
 }
 fn sidebar_color() -> Color {
-    Color::from_rgb8(244, 247, 248)
+    Color::from_rgb8(237, 243, 241)
 }
-fn card_color() -> Color {
-    Color::from_rgb8(246, 248, 249)
+fn soft() -> Color {
+    Color::from_rgb8(241, 246, 244)
 }
 fn hover_color() -> Color {
-    Color::from_rgb8(229, 241, 238)
+    Color::from_rgb8(220, 239, 233)
 }
 fn line() -> Color {
-    Color::from_rgb8(219, 228, 230)
+    Color::from_rgb8(218, 229, 225)
+}
+fn ink() -> Color {
+    Color::from_rgb8(26, 43, 42)
 }
 fn muted() -> Color {
-    Color::from_rgb8(88, 105, 111)
+    Color::from_rgb8(80, 101, 98)
 }
 fn accent() -> Color {
-    Color::from_rgb8(28, 102, 91)
+    Color::from_rgb8(22, 106, 90)
 }
 fn accent_hover() -> Color {
-    Color::from_rgb8(23, 85, 76)
+    Color::from_rgb8(15, 85, 72)
+}
+fn warm() -> Color {
+    Color::from_rgb8(169, 105, 31)
 }
 
 #[cfg(test)]
