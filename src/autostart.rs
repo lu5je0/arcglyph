@@ -13,12 +13,14 @@ fn autostart_path() -> PathBuf {
     base.join("autostart").join("arcglyph.desktop")
 }
 
-/// Command to launch on login. Prefer the packaged binary; fall back to the
-/// running executable so a locally-built binary still autostarts correctly.
+/// Prefer a stable system path, then the package wrapper, then the running binary.
 fn exec_path() -> String {
     let packaged = PathBuf::from("/usr/bin/arcglyph");
     if packaged.exists() {
         return packaged.display().to_string();
+    }
+    if let Some(wrapper) = std::env::var_os("ARCGLYPH_AUTOSTART_EXEC").filter(|p| !p.is_empty()) {
+        return PathBuf::from(wrapper).display().to_string();
     }
     std::env::current_exe()
         .map(|p| p.display().to_string())

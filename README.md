@@ -21,6 +21,41 @@ The permissions script configures access to the input devices and `/dev/uinput`.
 Sign out and back in so the new group membership takes effect, then run
 `./target/release/arcglyph` as your regular user.
 
+### Nix and NixOS
+
+Build with `nix build github:lu5je0/arcglyph`, or install in your Nix profile
+with `nix profile add github:lu5je0/arcglyph`. On Linux distributions other than
+NixOS, configure device access with `./setup-perms.sh` from this repository.
+
+On NixOS, add ArcGlyph to your system flake's inputs:
+
+```nix
+inputs.arcglyph = {
+  url = "github:lu5je0/arcglyph";
+  inputs.nixpkgs.follows = "nixpkgs";
+};
+```
+
+Include the module and grant device access to your login account:
+
+```nix
+# In the modules list passed to nixpkgs.lib.nixosSystem:
+[
+  inputs.arcglyph.nixosModules.default
+  {
+    programs.arcglyph = {
+      enable = true;
+      users = [ "alice" ];
+    };
+  }
+]
+```
+
+The module installs ArcGlyph, enables `uinput`, and adds the listed users to
+the `input` and `uinput` groups. Sign out and back in after rebuilding to apply
+group membership. Use **Start at login** in ArcGlyph to enable autostart. The
+module provides a stable `/usr/bin/arcglyph` launcher for that entry.
+
 ### GNOME setup
 
 Enable the bundled **Arcglyph Helper** extension so ArcGlyph can identify windows
