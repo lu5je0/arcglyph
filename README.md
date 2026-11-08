@@ -1,139 +1,125 @@
-# Arcglyph
+# ArcGlyph
 
-Elegant mouse-gesture daemon for Wayland (KDE Plasma & GNOME).
+ArcGlyph maps mouse gestures to keyboard shortcuts on KDE Plasma and GNOME
+Wayland. Hold the **right mouse button**, draw a gesture, then release. ArcGlyph
+shows the trail as you draw and sends the matching shortcut to the focused app.
 
-Hold **right mouse button**, draw a shape, release. Arcglyph recognizes the
-gesture, forwards the mapped keyboard shortcut to the focused app, and
-draws a smooth blue trail while you move.
-
-- Gesture recognition via evdev grab + uinput injection
-- Focused-window detection: KWin Scripting DBus API on KDE, companion shell
-  extension on GNOME
-- Per-app gesture groups — one group can cover multiple apps
-- Configurable via YAML or an inline GUI editor
-- Config hot-reload — save in GUI and changes apply instantly
-- Wayland-first: overlay drawn through `wlr-layer-shell` (KDE) or the shell
-  extension (GNOME), no X11 involved
-- Single binary, ships with a system-tray control (StatusNotifierItem)
-- Fullscreen windows are auto-bypassed — games and video players stay untouched
-- Smart bypass: apps without configured gestures get normal right-click behavior
+![ArcGlyph preferences showing browser gestures and the New tab gesture editor](assets/screenshots/gesture-groups.png)
 
 ## Quick start
 
-```
-# 1. Grant read access to /dev/input/event* and /dev/uinput (one time)
+Run `arcglyph` if you already have it installed. To build from this repository,
+install the Rust toolchain and your distribution's development packages for
+D-Bus, Wayland, libxkbcommon, Fontconfig, and udev, along with `pkg-config`.
+
+```sh
+cargo build --release --locked
 ./setup-perms.sh
-# --- log out, log back in ---
-
-# 2. Build
-cargo build --release
-
-# 3. Run
-./target/release/arcglyph
 ```
 
-Enable "Autostart" from the GUI header to launch arcglyph with your session.
+The permissions script configures access to the input devices and `/dev/uinput`.
+Sign out and back in so the new group membership takes effect, then run
+`./target/release/arcglyph` as your regular user.
 
-## GNOME
+### GNOME setup
 
-Mutter has no scripting API or `wlr-layer-shell`, so on GNOME arcglyph relies
-on the bundled **Arcglyph Helper** shell extension for focused-window
-detection and trail drawing:
+Enable the bundled **Arcglyph Helper** extension so ArcGlyph can identify windows
+and draw gesture trails on GNOME. Use `./target/release/arcglyph` in place of
+`arcglyph` if you built from source.
 
-```
-# Install the extension (also auto-synced on every launch in a GNOME session)
+```sh
 arcglyph --install-gnome-extension
+```
 
-# --- log out, log back in ---
+Sign out and back in after installing the extension, then enable it.
 
+```sh
 gnome-extensions enable arcglyph@lu5je0.github.io
 ```
 
-Without the extension, gestures stay in bypass mode (normal right-click).
-The tray icon additionally needs the
-[AppIndicator](https://extensions.gnome.org/extension/615/appindicator-support/)
-extension, as GNOME does not support StatusNotifierItem out of the box.
+The GNOME tray icon uses the [AppIndicator support extension](https://extensions.gnome.org/extension/615/appindicator-support/).
+KDE Plasma uses KWin's scripting API for window detection.
 
-## Gestures
+## Set up a gesture
 
-Directions use the numpad convention:
+1. **Choose or create a group.** Click **+** next to **Groups** to add one. Use
+   **Manage** to rename it or associate apps. You can type an app ID or use
+   **Pick window**, then click the target window. On GNOME you have eight seconds
+   to pick a window. A group with an empty app list applies to all apps.
+2. **Choose or add a gesture.** Select a row to edit it in the details pane, or
+   click **Add gesture**. Click **Draw gesture**, hold the **left mouse button** in
+   the drawing area, and release when finished. Use **Directions** to edit the
+   sequence one direction at a time.
+3. **Assign a shortcut.** Click **Record** and press the shortcut you want the
+   gesture to send. Enter a description so you can recognize it in the list.
+4. **Save and try it.** Click **Save config**, focus one of the associated apps,
+   and draw the gesture with the **right mouse button**. For example, draw ↗
+   followed by ↘ to open a new tab if the shortcut is set to **Ctrl+T**.
 
-```
+Right-click a group and choose **Copy group** to duplicate its apps and gestures.
+Each gesture has its own enable switch. Its row shows whether that individual
+gesture is enabled or paused. Use the switch beside the group title to control
+the whole group.
+
+## App settings
+
+![ArcGlyph app settings showing the global switch, login and tray options, and Quit ArcGlyph](assets/screenshots/app-settings.png)
+
+- **Global gesture switch** pauses recognition across all groups and preserves
+  their individual settings.
+- **Start at login** starts ArcGlyph with the desktop session. **Show tray icon**
+  controls whether its icon appears in the system tray.
+- **Language** switches between English and Simplified Chinese. The page also
+  shows the active configuration file.
+- **Quit ArcGlyph** closes the app and stops background recognition. Closing the
+  preferences window leaves ArcGlyph running in the background. Launch ArcGlyph
+  again or use **Preferences…** in the tray to reopen it.
+
+## Gesture matching
+
+Direction sequences use the number pad layout.
+
+```text
   7 8 9     ↖ ↑ ↗
   4 . 6  =  ← . →
   1 2 3     ↙ ↓ ↘
 ```
 
-A pattern is the sequence of direction changes. For example, `26` is down
-then right, and `93` is up-right then down-right. Arcglyph looks for an
-eight-direction match first, then tries four directions. If those attempts
-find no enabled binding for the current app, nearby directions can match a
-configured gesture. For example, `82` can trigger `93` when there is no `82`
-binding. Equally close matches in the same scope must agree on the shortcut.
+For example, `26` means down then right, and `93` means up-right then down-right.
+ArcGlyph tries the eight-direction match first, then the four-direction result
+and nearby directions. A straight up-then-down stroke (`82`) can therefore
+trigger `93` when no closer enabled binding applies. If equally close bindings
+in the same scope send different shortcuts, ArcGlyph skips the ambiguous match.
 
-## Configuration
+ArcGlyph passes regular right-clicks through when the focused window is full
+screen, the pointer is outside it, or the app has no applicable gestures.
 
-Set `ARCGLYPH_CONFIG` to override the config file path. Otherwise, Arcglyph
-uses `~/.dotfiles/arcglyph/arcglyph.yaml` when that directory exists, or
+## YAML configuration
+
+Set `ARCGLYPH_CONFIG` to use a specific file. Otherwise, ArcGlyph uses
+`~/.dotfiles/arcglyph/arcglyph.yaml` when that directory exists, or
 `${XDG_CONFIG_HOME:-$HOME/.config}/arcglyph/arcglyph.yaml`.
-
-Gestures are organized into **groups**. Each group associates a set of
-apps with a list of gestures:
 
 ```yaml
 enabled: true
+hide_tray: false
 lang: en
 groups:
   - name: Browser
-    apps: [google-chrome, chromium, microsoft-edge]
+    enabled: true
+    apps: [google-chrome, chromium, microsoft-edge, firefox]
     gestures:
-      - {label: Back, pattern: "4", keys: [LEFTALT, LEFT]}
-      - {label: Forward, pattern: "6", keys: [LEFTALT, RIGHT]}
-      - {label: Scroll to top, pattern: "8", keys: [HOME]}
-      - {label: Scroll to bottom, pattern: "2", keys: [END]}
-      - {label: Close tab, pattern: "26", keys: [LEFTCTRL, W]}
-      - {label: Reopen closed tab, pattern: "24", keys: [LEFTCTRL, LEFTSHIFT, T]}
-      - {label: Reload, pattern: "46", keys: [F5]}
-  - name: Global
-    apps: []
-    gestures:
-      - {label: Switch window, pattern: "46", keys: [LEFTALT, TAB]}
+      - { label: Back, pattern: "4", keys: [LEFTALT, LEFT] }
+      - { label: New tab, pattern: "93", keys: [LEFTCTRL, T] }
 ```
 
-Fields:
+- `enabled` controls the global switch. Groups and gestures can each have their
+  own `enabled` flag, which defaults to `true`.
+- `apps` contains case-insensitive app ID substrings. An app-specific binding
+  takes priority over a global binding for the same recognized pattern.
+- `pattern` is the quoted direction sequence. `keys` contains evdev key names
+  pressed together as a shortcut.
+- `lang` is `en` or `zh`. `hide_tray: true` hides the tray icon.
 
-- `lang` — GUI language: `en` (default) or `zh`. Toggle it from the header button.
-- `groups[*].name` — display name shown in the GUI.
-- `groups[*].apps` — list of app_id substrings (case-insensitive). Empty means "every window".
-- `groups[*].gestures[*].pattern` — numpad-direction sequence.
-- `groups[*].gestures[*].keys` — evdev key names pressed as a chord.
-- `groups[*].gestures[*].label` — description shown in the GUI.
-- `groups[*].gestures[*].enabled` — per-gesture switch.
-
-Config changes are detected automatically via inotify — no restart needed.
-
-## GUI
-
-Left-click the tray icon or pick **Preferences…** to open the editor.
-
-- Opening Arcglyph again shows the preferences window of the running instance
-- Choose a group in the sidebar and a gesture in the list to edit it in the details pane. The list shows whether each gesture is enabled or paused.
-- Use **+** next to **Groups** to add a group. Open **Manage** to rename a group or associate apps. Right-click a group to copy it.
-- Use **Draw gesture** in the details pane and drag with the left button to record its pattern.
-- **App settings** contains the global gesture switch, startup, tray, and language options.
-- Each group can associate multiple apps via chips or the **Pick window** button
-- **Pick window**: click the button, then click any window — its app_id is automatically added to the group
-- Set a shortcut by clicking **Record** and pressing the key combo directly
-- Switch the interface language (English / 中文) from the header button
-- Closing the window keeps the daemon running; **Quit** stops everything
-
-## Notes
-
-- The daemon grabs every pointing device with a right-button + relative axes.
-  Motion, wheel and other buttons are replayed through a virtual mouse so
-  nothing else changes.
-- Focused-window detection uses KWin's Scripting DBus API. A background
-  thread refreshes the cache every 300 ms so the right-click path never blocks.
-- If a fullscreen window is focused, arcglyph bypasses completely.
-- If the cursor is outside the focused window, right-click passes through unchanged.
-- Apps without any configured gestures get native right-click with zero delay.
+ArcGlyph reloads the configuration when you save it in the editor or edit it on
+disk.
