@@ -6,7 +6,13 @@ Use gestures across applications or set up app-specific bindings.
 Hold the **right mouse button**, draw a gesture, then release. ArcGlyph shows
 the trail as you draw and sends the matching shortcut to the focused app.
 
-![ArcGlyph preferences showing browser gestures and the New tab gesture editor](assets/screenshots/gesture-groups.png)
+![ArcGlyph mouse gestures for Back and Forward in a Chrome Guest window on GNOME Wayland](assets/screenshots/chrome-gestures.gif)
+
+*In Chrome Guest mode on GNOME Wayland, drag left to go back and right to go forward.*
+
+![ArcGlyph gestures opening and closing a tab in a Chrome Guest window](assets/screenshots/chrome-tab-gestures.gif)
+
+*Draw ↗ then ↘ to open a new tab, or ↓ then → to close the active tab.*
 
 ## Quick start
 
@@ -78,6 +84,8 @@ The GNOME tray icon uses the [AppIndicator support extension](https://extensions
 KDE Plasma uses KWin's scripting API for window detection.
 
 ## Set up a gesture
+
+![ArcGlyph preferences showing browser gestures and the New tab gesture editor](assets/screenshots/gesture-groups.png)
 
 1. **Choose or create a group.** Click **+** next to **Groups** to add one. Use
    **Manage** to rename it or associate apps. You can type an app ID or use
