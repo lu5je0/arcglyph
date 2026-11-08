@@ -18,7 +18,9 @@ the trail as you draw and sends the matching shortcut to the focused app.
 
 Run `arcglyph` if you already have it installed. To build from this repository,
 install the Rust toolchain and your distribution's development packages for
-D-Bus, Wayland, libxkbcommon, Fontconfig, and udev, along with `pkg-config`.
+D-Bus, Wayland, libxkbcommon (including X11 support), X11/XCB, Fontconfig,
+FreeType, and udev, along with `pkg-config`. The preferences interface
+uses [GPUI Kit](https://gpui-kit.com).
 
 ```sh
 cargo build --release --locked

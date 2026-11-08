@@ -4,6 +4,9 @@
   pkg-config,
   makeWrapper,
   dbus,
+  freetype,
+  libx11,
+  libxcb,
   fontconfig,
   wayland,
   libxkbcommon,
@@ -27,7 +30,7 @@ rustPlatform.buildRustPackage {
     ];
   };
 
-  cargoHash = "sha256-J4XQqCqcavKGs1OfXh17YeU+xBsBNtCwxjIhwkUGcfk=";
+  cargoHash = "sha256-mHBbebpz0GM/yGMpaHCnVm9sy4RgBeIkPSaw8swH+2w=";
 
   nativeBuildInputs = [
     makeWrapper
@@ -36,6 +39,9 @@ rustPlatform.buildRustPackage {
 
   buildInputs = [
     dbus
+    freetype
+    libx11
+    libxcb
     fontconfig
     wayland
     libxkbcommon
@@ -56,6 +62,8 @@ rustPlatform.buildRustPackage {
       --prefix LD_LIBRARY_PATH : "${
         lib.makeLibraryPath [
           wayland
+          libx11
+          libxcb
           libxkbcommon
           vulkan-loader
         ]

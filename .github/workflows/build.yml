@@ -28,6 +28,10 @@ jobs:
             libudev-dev \
             libwayland-dev \
             libfontconfig1-dev \
+            libfreetype6-dev \
+            libx11-dev \
+            libxcb1-dev \
+            libxkbcommon-x11-dev \
             libxkbcommon-dev \
             pkg-config
 

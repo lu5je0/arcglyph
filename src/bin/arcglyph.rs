@@ -71,7 +71,7 @@ fn main() {
         rt.block_on(tray::run(tray_tx));
     });
 
-    // Bridge tray commands into the iced runtime.
+    // Bridge tray commands into the GUI event loop.
     thread::spawn(move || {
         while let Ok(cmd) = tray_rx.recv() {
             match cmd {
