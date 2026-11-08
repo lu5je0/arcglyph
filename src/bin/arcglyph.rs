@@ -26,6 +26,10 @@ fn main() {
         }
     }
 
+    if let Err(err) = arcglyph::autostart::migrate_nixos_entry() {
+        eprintln!("arcglyph autostart migration: {err:#}");
+    }
+
     let start_hidden = std::env::args().any(|arg| arg == "--hidden");
     match instance::claim(!start_hidden, show_preferences) {
         Ok(true) => {}

@@ -892,15 +892,25 @@ impl App {
             ),
         ]
         .spacing(9);
-        let startup = column![
-            text(t(lang, S::StartupAndTray)).size(14).font(EMPHASIS),
-            divider(),
+        let login = if crate::autostart::is_managed() {
+            column![
+                text(t(lang, S::LaunchAtLogin)).size(13).font(EMPHASIS),
+                text(t(lang, S::LoginManaged)).size(11).color(muted()),
+            ]
+            .spacing(2)
+            .into()
+        } else {
             scope_toggle(
                 t(lang, S::LaunchAtLogin),
                 t(lang, S::LoginScope),
                 self.autostart,
                 Msg::ToggleAutostart,
-            ),
+            )
+        };
+        let startup = column![
+            text(t(lang, S::StartupAndTray)).size(14).font(EMPHASIS),
+            divider(),
+            login,
             divider(),
             scope_toggle(
                 t(lang, S::ShowTray),

@@ -54,6 +54,7 @@ Include the module and grant device access to your login account:
     programs.arcglyph = {
       enable = true;
       users = [ "alice" ];
+      autostart = true;
     };
   }
 ]
@@ -61,8 +62,10 @@ Include the module and grant device access to your login account:
 
 The module installs ArcGlyph, enables `uinput`, and adds the listed users to
 the `input` and `uinput` groups. Sign out and back in after rebuilding to apply
-group membership. Use **Start at login** in ArcGlyph to enable autostart. The
-module provides a stable `/usr/bin/arcglyph` launcher for that entry.
+group membership. With `programs.arcglyph.autostart` enabled, the module starts
+ArcGlyph for those users at Wayland login. ArcGlyph removes its older generated
+login entry when the system service takes over. When the module leaves login
+startup unmanaged, use **Start at login** in ArcGlyph to configure it.
 
 ### GNOME setup
 
